@@ -74,6 +74,16 @@ Look for changes to:
 
 Record any affected cross-repo surface area as `CROSS_REPO_SURFACES` for use in later steps. If none are found, record it as empty.
 
+#### Work Item Lookup
+
+Most PRs implement a tracked unit of work — a ticket, issue, or story in whatever system the team uses. Reviewing the diff alone misses the stated requirements and acceptance criteria, so find and fetch the source of work:
+
+1. Scan the branch name, PR title, and PR body for a work-item reference: an issue key (`ABC-123`), a "Fixes #123" / "Closes #123" link, or a URL to any tracker.
+2. Fetch it with whatever access is available — a connected MCP tool for the tracker, a tracker CLI, `gh issue view` for GitHub issues, or WebFetch for a reachable URL. Never invent ticket content you could not fetch.
+3. Distill it into a compact `WORK_ITEM_CONTEXT` block (30 lines max): id, title, goal, requirements/acceptance criteria, and any explicit out-of-scope notes. Compactness matters — this block is injected into several agent prompts.
+
+If no reference exists or the lookup fails, record `WORK_ITEM_CONTEXT` as empty, note it in the final report, and continue.
+
 Display banner:
 
 ```
@@ -82,6 +92,7 @@ PR: <REPO>#<PR_NUM>
 Title: <PR_TITLE>
 Branch: <HEAD_BRANCH> → <BASE_BRANCH>
 Files: <count> (+<adds> -<dels>)
+Work item: <id + title, or "none found">
 Cross-repo surfaces: <list, or "none detected">
 ━━━━━━━━━━━━━━━━━━━
 ```
@@ -187,6 +198,16 @@ Add these only when the diff content (not just file paths) warrants:
 - `data-migration-reviewer` — migration files, schema changes, backfills, data transformations, deploy-window safety.
 - `performance-reviewer` — database queries, loop-heavy data transforms, caching layers, I/O-intensive paths.
 - `previous-comments-reviewer` — only when the PR already has prior review feedback to verify was addressed.
+
+#### Work Item Context for Reviewers
+
+If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, include the block verbatim in the prompts of `/review`, `correctness-adversarial-reviewer`, and `testing-reviewer`, with these added instructions:
+
+- `correctness-adversarial-reviewer`: verify the implementation actually satisfies each stated requirement and acceptance criterion. A requirement that is unmet, partially met, or silently reinterpreted is a finding — HIGH if the PR claims to complete the work item. Also flag implemented behavior the work item explicitly ruled out of scope.
+- `testing-reviewer`: check that each acceptance criterion has a test exercising it. An untested acceptance criterion is a finding, not a minor note.
+- `/review`: use it as intent context when judging whether the change does what it set out to do.
+
+Do not inject the block into the style/standards agents — intent context doesn't change those reviews and just inflates their prompts.
 
 #### Model Tiering
 
