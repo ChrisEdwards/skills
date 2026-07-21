@@ -143,7 +143,7 @@ The gemini invocation lives in the bundled `gemini-review.sh` (alongside this sk
 
 #### 3c. Documentation Staleness Reviewer (subagent)
 
-Launch the `docs-staleness-reviewer` custom agent via the Agent tool with `run_in_background: true` and `subagent_type: "docs-staleness-reviewer"`. It runs concurrently with the other engines and its results are collected in Step 5.
+Launch the `docs-staleness-reviewer` custom agent via the Agent tool with `run_in_background: true`, `subagent_type: "docs-staleness-reviewer"`, and `model: "sonnet"` (docs comparison does not need a frontier model). It runs concurrently with the other engines and its results are collected in Step 5.
 
 **Agent prompt** (substitute the variables):
 
@@ -154,42 +154,61 @@ Branch: <HEAD_BRANCH> → <BASE_BRANCH>
 
 The agent's system prompt already contains the full investigation checklist and output format. Store the agent task ID so you can collect its results in Step 5.
 
-### Step 4a: Run standard review agents
+### Step 4: Run Claude Review Agents
 
-**Only after Step 3's tool calls have returned**, invoke the following standard review agents in parallel. Codex and Gemini are now running in the background and will complete while these agents (and the next set of agents) runs. 
+**Only after Step 3's tool calls have returned**, launch the Claude review agents. Codex and Gemini are running in the background and will complete while these agents run.
 
-Run the following reviews as parallel agents:
+**Create a TodoWrite item per agent before you start and mark each done only after it has actually run**, then attribute every finding to the agent that produced it.
 
-1. built-in `/review`, 
-2. built-in `/security-review`, 
-3. the Superpowers review skill: `Skill("superpowers:requesting-code-review")`
-4. the Compound Engineering specialist agents, 
-5. and Uncle Bob Clean Code skill for any Java files. 
+The roster below is deliberately small. It was consolidated from a ~20-lens roster after measuring 170 posted findings across 29 PRs: the lenses removed produced zero unique MEDIUM+ findings, and half of all posted comments were nitpick/LOW noise. Do not add extra review agents beyond this roster and its conditionals.
 
-**Create a TodoWrite item per engine before you start and mark each done only after it has actually run**, then attribute every finding to the engine that produced it.
+#### Roster Selection
 
-### Step 4b: Run additional review agents
+Size the roster to the diff before launching anything:
 
-Given the nature of the changes, determine which of the following reviewer agents would be useful to have review these changes. You will need to fire up each agent with a strong prompt to review in that role. Run these review agents in parallel. Here is list of agents to consider. Feel free to create new agents if they would be useful as this list is not exhaustive:
+- **Lite roster** — the diff has fewer than ~50 changed executable lines AND touches no risk domain (auth, payments, data mutations, migrations, external APIs, serialization). Run only the built-in `/review` and `project-standards-reviewer`. Codex and Gemini from Step 3 still provide the cross-model check.
+- **Full roster** — everything else. Run all six core agents plus any conditional agents whose trigger matches.
 
-- `correctness-reviewer` - REQUIRED: Reviews code for logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches.
-  - `maintainability-reviewer` - REQUIRED: Reviews code for structural quality, complexity deletion, coupling, naming, dead code, type-boundary leaks, and abstraction debt.
-  - `testing-reviewer` - REQUIRED: Reviews code for test coverage gaps, weak assertions, brittle implementation-coupled tests, and missing edge case coverage. Audits test effectiveness with SRE-level scrutiny for tautological tests, weak assertions, coverage gaming
-  - `project-standards-reviewer` - REQUIRED: Audits changes against the project's own CLAUDE.md and AGENTS.md standards (frontmatter rules, reference inclusion, naming conventions, cross-platform portability).
-- `adversarial-reviewer` - Selected when the diff is large (≥50 changed lines) or touches high-risk domains like auth, payments, data mutations, or external APIs. Actively constructs failure scenarios
-- `api-contract-reviewer ` - Selected when the diff touches API routes, request/response types, serialization, versioning, or exported type signatures. Reviews for breaking contract changes.
-- `data-migration-reviewer` - Review for migration files, schema dumps, backfills, and data transformations. Covers schema drift, mapping correctness, deploy-window safety, and verification plans.
-- `data-integrity-reveiwer` - Reviews database migrations, data models, and persistent data code for safety. Use when checking migration safety, data constraints, transaction boundaries, or privacy compliance.
-- `performance-reviewer` - Selected when the diff touches database queries, loop-heavy data transforms, caching layers, or I/O-intensive paths. Reviews for runtime performance and scalability.
-- `previous-comments-reviewer` - Checks whether prior PR feedback was addressed
-- `reliability-reviewer` - Selected when the diff touches error handling, retries, circuit breakers, timeouts, health checks, background jobs, or async handlers. Reviews for production reliability.
-- `code-simplicity-reviewer` - REQUIRED: Review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities.
-- `coherence-reviewer` - Reviews planning documents for internal consistency: contradictions between sections, terminology drift, structural issues, and ambiguity where readers would diverge. Spawned by the document-review orchestrator.
-- `spec-flow-analyzer` - Analyzes specifications and feature descriptions for user flow completeness and gap identification. Use when a spec, plan, or feature description needs flow analysis, edge case discovery, or requirement gaps surfaced.
+#### Core Agents (full roster, run in parallel)
+
+1. Built-in `/review`
+2. Built-in `/security-review`
+3. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation.
+4. `testing-reviewer` — test coverage gaps, weak assertions, brittle implementation-coupled tests, missing edge cases, tautological tests, and coverage gaming.
+5. `project-standards-reviewer` — audits changes against the target repo's own standards (CLAUDE.md, AGENTS.md, linter configs, contributing docs). Locate the standards file paths first and pass the path list in the prompt; the agent reads them itself.
+6. `maintainability-reviewer` — structural quality, complexity, coupling, naming, dead code, duplication, YAGNI violations, and simplification opportunities. This one agent owns the entire style/structure axis (it replaces separate clean-code, simplicity, and architecture reviewers, which historically produced no unique substantive findings).
+
+#### Conditional Agents
+
+Add these only when the diff content (not just file paths) warrants:
+
+- `reliability-reviewer` — error handling, retries, circuit breakers, timeouts, health checks, background jobs, async handlers.
+- `api-contract-reviewer` — API routes, request/response types, serialization, versioning, exported type signatures.
+- `data-migration-reviewer` — migration files, schema changes, backfills, data transformations, deploy-window safety.
+- `performance-reviewer` — database queries, loop-heavy data transforms, caching layers, I/O-intensive paths.
+- `previous-comments-reviewer` — only when the PR already has prior review feedback to verify was addressed.
+
+#### Model Tiering
+
+Launch `maintainability-reviewer` and `project-standards-reviewer` with `model: "sonnet"` on the Agent tool — the style/standards axis does not need a frontier model. The docs-staleness agent in Step 3c should also use `model: "sonnet"`. All other agents inherit the session default.
+
+#### Agent Output Contract
+
+Every agent prompt (including the built-in skills where possible) must end with this output instruction:
+
+```
+Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title,
+file:line, a one-paragraph issue description, and a one-line suggested fix.
+Only report findings you would defend as MEDIUM or higher. Anything below that
+bar goes in a "Minor notes" list at the end (one line each, max 5). Return only
+findings and minor notes — no preamble, no prose report.
+```
+
+This keeps consolidation cheap: the orchestrator merges compact structured findings instead of parsing long prose reports. Agent minor notes become LOW findings with verdict SKIP in Step 6.
 
 ### Step 5: Collect Background Results
 
-After standared reviews, and specialized agent reviews complete and the Gemini background task finishes, read the Gemini output. Then wait for Codex (which runs as a detached process and may take up to 15 minutes). Also collect the Docs Staleness agent results.
+After the Step 4 review agents complete and the Gemini background task finishes, read the Gemini output. Then wait for Codex (which runs as a detached process and may take up to 15 minutes). Also collect the Docs Staleness agent results.
 
 **Gemini** (should be done by now — read directly):
 
@@ -283,11 +302,13 @@ After this step completes, merge any new findings into the consolidated findings
 
 ### Step 8: Validate Findings (Eliminate False Positives)
 
-Before producing the final report, **YOU MUST DISPATCH VALIDATION AGENTS** TO VALIDATE EVERY CRITICAL, HIGH, and MEDIUM finding against the broader codebase and any upstream/downstream systems. The goal is to eliminate false positives so the final report only contains real, actionable issues.
+Before producing the final report, **YOU MUST DISPATCH VALIDATION AGENTS** to validate every CRITICAL, HIGH, and MEDIUM finding **that only one engine flagged** against the broader codebase and any upstream/downstream systems. The goal is to eliminate false positives so the final report only contains real, actionable issues.
+
+Findings corroborated by 2+ **distinct engines** (Claude, Codex, Gemini, docs staleness — engines, not Claude sub-agents; five Claude agents agreeing is still one engine) skip validation and are treated as CONFIRMED. They were found independently by separately trained models, which is stronger evidence than one more Claude pass.
 
 #### Dispatching Validation Agents
 
-Group findings into batches and dispatch them to parallel subagents (Agent tool with `subagent_type: "Explore"`). Use these rules for batching:
+Group the single-engine CRITICAL/HIGH/MEDIUM findings into batches and dispatch them to parallel subagents (Agent tool with `subagent_type: "Explore"`). Use these rules for batching:
 
 - **1-3 findings total** — one validation agent handles all of them
 - **4-8 findings** — split into 2 agents (roughly equal batches)
@@ -351,10 +372,11 @@ Produce this exact format:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 REVIEW SOURCES
-  Claude (maintainability-review)     .... <status: OK | FAILED>
+  Claude (<one line per agent run>)  .... <status: OK | FAILED>
   Codex  (review)            .... <status: OK | FAILED>
   Gemini (code-review)       .... <status: OK | FAILED>
   Docs Staleness (reviewer)  .... <status: OK | FAILED | NO STALE DOCS>
+  Roster: <full | lite — reason>
 
 ━━━ SUMMARY ━━━
 
@@ -513,9 +535,18 @@ This creates one review with all inline comments attached, rather than posting c
 
 #### Comment Body Format
 
-Each inline comment must clearly explain the issue and attribute the source model(s). Use this format:
+**Only findings with verdict FIX or CONSIDER get inline comments.** Findings with verdict SKIP (all LOW/nitpick-grade items, including agent minor notes) are never posted as inline comments — half of all inline comments in past runs were nitpick/LOW noise. Instead, collect them into one collapsed block at the end of the review body:
 
-**For findings with verdict FIX or CONSIDER:**
+```
+<details>
+<summary>Minor notes (<count>)</summary>
+
+- `path/file.py:42` — <one-line note> *(<attribution>)*
+- ...
+</details>
+```
+
+Each inline comment must clearly explain the issue and attribute the source model(s). Use this format:
 
 ```
 **[<SEVERITY>]** <title>
@@ -531,30 +562,17 @@ Also affects: `path/to/other_file.py:42`, `path/to/another.py:88`
 *Found by: <attribution>*
 ```
 
-**For findings with verdict SKIP:**
-
-```
-**[nitpick]** <title>
-
-<Clear explanation of the minor issue.>
-
----
-*Found by: <attribution>*
-```
-
 #### Attribution Rules
 
-The "Found by" line must identify which model(s) flagged the issue and, for Claude findings, which specific istari reviewer detected it:
+The "Found by" line must identify which model(s) flagged the issue and, for Claude findings, which specific review agent detected it:
 
 - **Codex findings** → `Found by: Codex`
 - **Gemini findings** → `Found by: Gemini`
 - **Claude findings** → Look at the review output in your context to determine which specific reviewer surfaced the finding:
   - Built-in `/review` → `Found by: Claude (code review)`
   - Built-in `/security-review` → `Found by: Claude (security review)`
-  - Superpowers code review → `Found by: Claude (Superpowers review)`
-  - Standard/specialized agents → `Found by: Claude (<agent name>)` — use the specific agent name (e.g., "maintainability-review", "testing-reviewer", etc.)
-  - Uncle Bob Clean Code review → `Found by: Claude (Uncle Bob)`
-- **Multi-engine findings** → List all engines, e.g., `Found by: Claude (Uncle Bob) + Codex + Gemini (3/3 consensus)`
+  - Named review agents → `Found by: Claude (<agent name>)` — use the specific agent name (e.g., "correctness-adversarial-reviewer", "testing-reviewer", etc.)
+- **Multi-engine findings** → List all engines, e.g., `Found by: Claude (testing-reviewer) + Codex + Gemini (3/3 consensus)`
 - **Docs staleness findings** (generated in Step 3c) → `Found by: Docs staleness reviewer`
 - **Cross-repo impact findings** (generated in Step 7) → `Found by: Cross-repo impact analysis`
 
