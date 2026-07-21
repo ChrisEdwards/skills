@@ -176,7 +176,7 @@ Size the roster to the diff before launching anything:
 3. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation.
 4. `testing-reviewer` — test coverage gaps, weak assertions, brittle implementation-coupled tests, missing edge cases, tautological tests, and coverage gaming.
 5. `project-standards-reviewer` — audits changes against the target repo's own standards (CLAUDE.md, AGENTS.md, linter configs, contributing docs). Locate the standards file paths first and pass the path list in the prompt; the agent reads them itself.
-6. `maintainability-reviewer` — structural quality, complexity, coupling, naming, dead code, duplication, YAGNI violations, and simplification opportunities. This one agent owns the entire style/structure axis (it replaces separate clean-code, simplicity, and architecture reviewers, which historically produced no unique substantive findings).
+6. `maintainability-reviewer` — structural quality, complexity, coupling, naming, dead code, duplication, YAGNI violations, and simplification opportunities. This one agent owns the entire style/structure axis (it replaces separate clean-code, simplicity, and architecture reviewers, which historically produced no unique substantive findings). Instruct it: duplication with a concrete consolidation target (two or more named sites that can collapse into one function, constant, or type) rates MEDIUM, not LOW — those findings change code and get acted on; they are not style notes.
 
 #### Conditional Agents
 
@@ -200,8 +200,10 @@ Every agent prompt (including the built-in skills where possible) must end with 
 Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title,
 file:line, a one-paragraph issue description, and a one-line suggested fix.
 Only report findings you would defend as MEDIUM or higher. Anything below that
-bar goes in a "Minor notes" list at the end (one line each, max 5). Return only
-findings and minor notes — no preamble, no prose report.
+bar goes in a "Minor notes" list at the end (one line each, max 5, ordered
+most-actionable first so a concrete suggested change never loses its slot to a
+naming or phrasing observation). Return only findings and minor notes — no
+preamble, no prose report.
 ```
 
 This keeps consolidation cheap: the orchestrator merges compact structured findings instead of parsing long prose reports. Agent minor notes become LOW findings with verdict SKIP in Step 6.
