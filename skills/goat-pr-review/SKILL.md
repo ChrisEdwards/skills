@@ -673,7 +673,7 @@ rmdir "$GOAT_RUN_DIR"
 
 ## Forked Review Lenses (default Step 4 path when feasible)
 
-Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model. Measured on the same PR (teamserver#9927), the forked run cost $18.49 vs $25.31 standard, with every lens on the frontier model at ~$1.83 per lens (vs ~$4.30 for a fresh frontier-model agent).
+Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model. Measured back-to-back on the same PR, the forked run cost roughly a quarter less overall, with every lens on the frontier model at less than half the per-lens cost of a fresh frontier-model agent.
 
 **Use this path by default whenever both conditions hold**; otherwise run the standard Step 4 dispatch:
 
