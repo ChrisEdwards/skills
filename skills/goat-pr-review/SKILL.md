@@ -426,6 +426,7 @@ REVIEW SOURCES
   Gemini (code-review)       .... <status: OK | FAILED>
   Docs Staleness (reviewer)  .... <status: OK | FAILED | NO STALE DOCS>
   Roster: <full | lite — reason>
+  Lenses: <forked | standard — reason>
 
 ━━━ SUMMARY ━━━
 
@@ -674,8 +675,10 @@ Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inh
 
 **This path is experimental.** Fork spawning is gated behind `CLAUDE_CODE_FORK_SUBAGENT=1` (staged rollout, semantics may change). Use it only when all of the following hold; otherwise run the standard Step 4:
 
-1. The environment supports it (a test `Agent` call with `subagent_type: "fork"` does not error — on error, fall back silently to standard Step 4).
+1. The environment supports it (a test `Agent` call with `subagent_type: "fork"` does not error — on error, fall back to standard Step 4).
 2. The review pack is under ~50k tokens (the diff joins the main context for the rest of the run).
+
+**Always report which path ran.** At the moment you choose, print one line to the user: `Lenses: forked` or `Lenses: standard — <reason>` (e.g. "fork not supported in this environment", "review pack 82k tokens exceeds 50k limit", "CLAUDE_CODE_FORK_SUBAGENT not set"). Carry the same line into the Step 9 report's REVIEW SOURCES section. The fallback must never be silent — the user is comparing cost between the two paths and needs to know which one produced each run.
 
 How it changes the flow:
 
