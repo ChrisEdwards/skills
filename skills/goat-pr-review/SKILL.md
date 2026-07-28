@@ -182,6 +182,8 @@ The agent's system prompt already contains the full investigation checklist and 
 
 **Only after Step 3's tool calls have returned**, launch the Claude review agents. Codex and Gemini are running in the background and will complete while these agents run.
 
+**Check the fork gate first.** Forked lenses (see "Forked Review Lenses" below) are the DEFAULT way to run this step when both feasibility conditions hold — they delivered frontier-model lenses at below-Sonnet-lens cost in measured runs. Run the standard dispatch below only when the gate fails, and report the choice either way.
+
 **Create a TodoWrite item per agent before you start and mark each done only after it has actually run**, then attribute every finding to the agent that produced it.
 
 The roster below is deliberately small. It was consolidated from a ~20-lens roster after measuring 170 posted findings across 29 PRs: the lenses removed produced zero unique MEDIUM+ findings, and half of all posted comments were nitpick/LOW noise. Do not add extra review agents beyond this roster and its conditionals.
@@ -669,13 +671,13 @@ rm -f "$GOAT_RUN_DIR"/*
 rmdir "$GOAT_RUN_DIR"
 ```
 
-## Experimental: Forked Review Lenses (optional Step 4 variant)
+## Forked Review Lenses (default Step 4 path when feasible)
 
-Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model. Estimated per-lens cost is comparable to a Sonnet agent reading the review pack, with frontier-model quality.
+Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model. Measured on the same PR (teamserver#9927), the forked run cost $18.49 vs $25.31 standard, with every lens on the frontier model at ~$1.83 per lens (vs ~$4.30 for a fresh frontier-model agent).
 
-**This path is experimental.** Fork spawning is gated behind `CLAUDE_CODE_FORK_SUBAGENT=1` (staged rollout, semantics may change). Use it only when all of the following hold; otherwise run the standard Step 4:
+**Use this path by default whenever both conditions hold**; otherwise run the standard Step 4 dispatch:
 
-1. The environment supports it (a test `Agent` call with `subagent_type: "fork"` does not error — on error, fall back to standard Step 4).
+1. The environment supports it: `CLAUDE_CODE_FORK_SUBAGENT=1` is set, and the fork `Agent` calls do not error (on error, fall back to standard Step 4 — loudly, never silently). Fork spawning is still a staged-rollout feature, so treat "not available" as normal, not as a failure.
 2. The review pack is under ~50k tokens (the diff joins the main context for the rest of the run).
 
 **Always report which path ran.** At the moment you choose, print one line to the user: `Lenses: forked` or `Lenses: standard — <reason>` (e.g. "fork not supported in this environment", "review pack 82k tokens exceeds 50k limit", "CLAUDE_CODE_FORK_SUBAGENT not set"). Carry the same line into the Step 9 report's REVIEW SOURCES section. The fallback must never be silent — the user is comparing cost between the two paths and needs to know which one produced each run.
