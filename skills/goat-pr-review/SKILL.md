@@ -42,29 +42,17 @@ All subsequent steps write inside this directory, e.g. `$GOAT_RUN_DIR/codex-revi
 
 Accept a PR URL as the skill argument. If none provided, determine if there is a pr for the current branch and use it.
 
-Extract metadata via Bash:
+Extract metadata, the file count, and the changed-file list in ONE Bash call. Every main-loop tool call re-reads the entire cached conversation, so batching commands is a direct cost lever — measured runs spent several dollars purely on cache reads from tiny sequential Bash steps:
 
 ```bash
-gh pr view "<PR_URL>" --json title,baseRefName,headRefName,additions,deletions,number,url --jq '{title,baseRefName,headRefName,additions,deletions,number,url}'
+gh pr view "<PR_URL>" --json title,baseRefName,headRefName,additions,deletions,number,url,files --jq '{title,baseRefName,headRefName,additions,deletions,number,url,fileCount:(.files|length),files:[.files[].path]}'
 ```
 
-Extract: `BASE_BRANCH`, `HEAD_BRANCH`, `PR_NUM`, `PR_TITLE`, `REPO` (from URL path).
-
-Count changed files:
-
-```bash
-gh pr view "<PR_URL>" --json files --jq '.files | length'
-```
+Extract: `BASE_BRANCH`, `HEAD_BRANCH`, `PR_NUM`, `PR_TITLE`, `REPO` (from URL path), plus the changed-file list used by the scan below.
 
 #### Cross-Repository Impact Scan
 
-After extracting metadata, identify whether the PR changes anything that other repositories consume or depend on. Fetch the file list and scan for cross-repo surface area:
-
-```bash
-gh pr view "<PR_URL>" --json files --jq '.files[].path'
-```
-
-Look for changes to:
+Using the file list already fetched above, identify whether the PR changes anything that other repositories consume or depend on. Look for changes to:
 - **Published API contracts** (OpenAPI specs, protobuf definitions, shared DTOs, REST/gRPC interfaces)
 - **Shared libraries or modules** consumed by other repos (common/, shared/, SDK packages)
 - **Database schemas or migrations** that other services read from
@@ -72,7 +60,7 @@ Look for changes to:
 - **Configuration contracts** (environment variable names, feature flag keys, config file formats)
 - **Build/publish artifacts** (Gradle publishing config, artifact coordinates, version bumps)
 
-Record any affected cross-repo surface area as `CROSS_REPO_SURFACES` for use in later steps. If none are found, record it as empty.
+A path pattern alone (a file under `config/` or `shared/`) is NOT a surface. Confirm from the diff hunks that the change alters something another repository actually consumes — internal config-value changes do not qualify. Record confirmed surfaces as `CROSS_REPO_SURFACES`; if none, record it as empty. If the only surface is small or doubtful, do not plan a dedicated Step 7 agent — add a one-line note about it to the `correctness-adversarial-reviewer` prompt instead.
 
 #### Work Item Lookup
 
@@ -80,7 +68,7 @@ Most PRs implement a tracked unit of work — a ticket, issue, or story in whate
 
 1. Scan the branch name, PR title, and PR body for a work-item reference: an issue key (`ABC-123`), a "Fixes #123" / "Closes #123" link, or a URL to any tracker.
 2. Fetch it with whatever access is available — a connected MCP tool for the tracker, a tracker CLI, `gh issue view` for GitHub issues, or WebFetch for a reachable URL. Never invent ticket content you could not fetch.
-3. Distill it into a compact `WORK_ITEM_CONTEXT` block (30 lines max): id, title, goal, requirements/acceptance criteria, and any explicit out-of-scope notes. Compactness matters — this block is injected into several agent prompts.
+3. Distill it into a compact `WORK_ITEM_CONTEXT` block (30 lines max): id, title, goal, requirements/acceptance criteria, and any explicit out-of-scope notes. Compactness matters — this block goes into the shared review pack that every agent reads.
 
 If no reference exists or the lookup fails, record `WORK_ITEM_CONTEXT` as empty, note it in the final report, and continue.
 
@@ -124,7 +112,30 @@ git status --porcelain
 
 If the checkout itself fails (e.g., conflicts), report the error and abort.
 
-### Step 3: Launch Codex, Gemini, and Docs Staleness Reviewer
+### Step 2.5: Build the Shared Review Pack
+
+Every Claude agent in this skill needs the same base context: PR metadata, the work item, the changed-file list, and the diff. Transcript analysis of past runs showed each reviewer independently re-deriving all of it — 15-30 tool calls and 150k-400k cache-write tokens per agent, duplicated across the whole fleet. That duplication was the single largest cost in the skill. Build the context once instead:
+
+```bash
+{
+  echo "# Review Pack: <REPO>#<PR_NUM> — <PR_TITLE>"
+  echo "Branch: <HEAD_BRANCH> -> <BASE_BRANCH> | <FILE_COUNT> files | +<ADDS> -<DELS>"
+  echo
+  echo "## Work Item"
+  echo "<WORK_ITEM_CONTEXT block, or 'None found.'>"
+  echo
+  echo "## Changed Files"
+  gh pr view <PR_NUM> --json files --jq '.files[].path'
+  echo
+  echo "## Full Diff"
+  git diff "<BASE_BRANCH>...HEAD"
+} | LC_ALL=C tr -d '\000-\010\013-\037\177' > "$GOAT_RUN_DIR/review-pack.md"
+wc -c "$GOAT_RUN_DIR/review-pack.md"
+```
+
+Substitute the literal values (heredoc-style expansion of `WORK_ITEM_CONTEXT` is fine as an `echo` per line or a quoted block). If the pack exceeds ~400KB, the diff is too large for agents to read whole — note the size in each agent prompt and instruct agents to read the pack's file list, then read the diff selectively with `Read` offsets.
+
+The pack is the input contract for every Claude agent launched in Steps 3c, 4, 7, and 8.
 
 **Send Codex, Gemini, and the Docs Staleness agent as three parallel tool calls in one message.** Wait for the tool results to return, then proceed to Step 4.
 
@@ -161,6 +172,8 @@ Launch the `docs-staleness-reviewer` custom agent via the Agent tool with `run_i
 ```
 Review PR #<PR_NUM> in <REPO> for stale documentation.
 Branch: <HEAD_BRANCH> → <BASE_BRANCH>
+Read <GOAT_RUN_DIR>/review-pack.md first — it has the changed-file list and full
+diff. Do not re-fetch the diff with git or gh.
 ```
 
 The agent's system prompt already contains the full investigation checklist and output format. Store the agent task ID so you can collect its results in Step 5.
@@ -199,19 +212,33 @@ Add these only when the diff content (not just file paths) warrants:
 - `performance-reviewer` — database queries, loop-heavy data transforms, caching layers, I/O-intensive paths.
 - `previous-comments-reviewer` — only when the PR already has prior review feedback to verify was addressed.
 
+#### Agent Input Contract
+
+Every review agent prompt in this step — and the cross-repo (Step 7) and validation (Step 8) agent prompts — must BEGIN with this block (substitute the literal run directory path):
+
+```
+Read <GOAT_RUN_DIR>/review-pack.md first. It contains the PR metadata, work item,
+changed-file list, and full diff. Do NOT re-fetch the diff with git or gh.
+Read source files only when you need context beyond the diff.
+```
+
+This replaces per-agent re-derivation of the diff, which past-run transcripts showed was the skill's largest token cost.
+
 #### Work Item Context for Reviewers
 
-If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, include the block verbatim in the prompts of `/review`, `correctness-adversarial-reviewer`, and `testing-reviewer`, with these added instructions:
+The work item block travels inside the review pack, so do not paste it into prompts. If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, add these instructions to the prompts of `/review`, `correctness-adversarial-reviewer`, and `testing-reviewer`:
 
 - `correctness-adversarial-reviewer`: verify the implementation actually satisfies each stated requirement and acceptance criterion. A requirement that is unmet, partially met, or silently reinterpreted is a finding — HIGH if the PR claims to complete the work item. Also flag implemented behavior the work item explicitly ruled out of scope.
 - `testing-reviewer`: check that each acceptance criterion has a test exercising it. An untested acceptance criterion is a finding, not a minor note.
 - `/review`: use it as intent context when judging whether the change does what it set out to do.
 
-Do not inject the block into the style/standards agents — intent context doesn't change those reviews and just inflates their prompts.
+Only those three agents get the added instructions — intent context doesn't change the style/standards reviews.
 
 #### Model Tiering
 
-Launch `maintainability-reviewer` and `project-standards-reviewer` with `model: "sonnet"` on the Agent tool — the style/standards axis does not need a frontier model. The docs-staleness agent in Step 3c should also use `model: "sonnet"`. All other agents inherit the session default.
+Only two lenses inherit the session-default frontier model: `correctness-adversarial-reviewer` and the built-in `/security-review`. Launch EVERY other Claude agent with `model: "sonnet"` on the Agent tool: built-in `/review`, `testing-reviewer`, `project-standards-reviewer`, `maintainability-reviewer`, all conditional agents, the docs-staleness agent (Step 3c), the cross-repo agent (Step 7), and all validation agents (Step 8).
+
+This is not optional. Transcript analysis of past runs showed most agents silently inheriting the frontier model, which multiplied cost 2-3x. Codex and Gemini already provide the independent frontier-model cross-check, so the tiered lenses lose little — their job is coverage, not depth.
 
 #### Agent Output Contract
 
@@ -301,9 +328,9 @@ Map each engine's severity to a unified scale:
 
 ### Step 7: Cross-Repository Impact Analysis
 
-If `CROSS_REPO_SURFACES` from Step 1 is non-empty, dispatch one or more subagents (Agent tool with `subagent_type: "Explore"`) to investigate whether the PR's changes break or degrade consumers in other repositories. This step generates **new findings** that get added to the consolidated list. It does not validate existing findings.
+If `CROSS_REPO_SURFACES` from Step 1 is non-empty, dispatch ONE subagent (Agent tool with `subagent_type: "Explore"`, `model: "sonnet"`) to investigate whether the PR's changes break or degrade consumers in other repositories. This step generates **new findings** that get added to the consolidated list. It does not validate existing findings.
 
-The agent prompt must include the `CROSS_REPO_SURFACES` list, the PR diff summary, and the repo/branch context. Instruct the agent to investigate each surface area for the following categories of cross-repo breakage:
+The agent prompt must begin with the Agent Input Contract block (Step 4), then include the `CROSS_REPO_SURFACES` list and the repo/branch context. Instruct the agent to investigate each surface area for the following categories of cross-repo breakage:
 
 **Breaking API changes.** Does the PR remove, rename, or change the type of a field, endpoint, parameter, or return value that external clients depend on? A backwards-incompatible API change that ships without coordinating with consumers is a CRITICAL finding.
 
@@ -325,19 +352,18 @@ After this step completes, merge any new findings into the consolidated findings
 
 ### Step 8: Validate Findings (Eliminate False Positives)
 
-Before producing the final report, **YOU MUST DISPATCH VALIDATION AGENTS** to validate every CRITICAL, HIGH, and MEDIUM finding **that only one engine flagged** against the broader codebase and any upstream/downstream systems. The goal is to eliminate false positives so the final report only contains real, actionable issues.
+Before producing the final report, **YOU MUST DISPATCH VALIDATION AGENTS** to validate every CRITICAL and HIGH finding **that only one engine flagged** against the broader codebase and any upstream/downstream systems. The goal is to eliminate false positives so the final report only contains real, actionable issues.
 
 Findings corroborated by 2+ **distinct engines** (Claude, Codex, Gemini, docs staleness — engines, not Claude sub-agents; five Claude agents agreeing is still one engine) skip validation and are treated as CONFIRMED. They were found independently by separately trained models, which is stronger evidence than one more Claude pass.
 
+Single-engine MEDIUM findings also skip validation. Under the per-finding verdict logic they resolve to CONSIDER either way, so validating them spends tokens without changing the report's disposition. LOW findings skip validation as before (SKIP verdicts).
+
 #### Dispatching Validation Agents
 
-Group the single-engine CRITICAL/HIGH/MEDIUM findings into batches and dispatch them to parallel subagents (Agent tool with `subagent_type: "Explore"`). Use these rules for batching:
+Group the single-engine CRITICAL/HIGH findings into batches and dispatch them to parallel subagents (Agent tool with `subagent_type: "Explore"`, `model: "sonnet"`). Each agent prompt must begin with the Agent Input Contract block (Step 4). Use these rules for batching:
 
-- **1-3 findings total** — one validation agent handles all of them
-- **4-8 findings** — split into 2 agents (roughly equal batches)
-- **9+ findings** — split into 3 agents (roughly equal batches)
-
-LOW findings skip validation. They appear in the final report as-is (with SKIP verdicts).
+- **1-5 findings total** — one validation agent handles all of them
+- **6+ findings** — split into 2 agents (roughly equal batches)
 
 Each validation agent receives all the findings in its batch plus the PR context (repo, branch, base branch, PR title). The agent prompt must include:
 
@@ -629,7 +655,7 @@ If the review API call fails (e.g., a comment targets a line not in the diff), t
 
 ### Step 11: Cleanup
 
-Restore the original branch if we changed it in Step 2:
+Run the whole cleanup as ONE Bash call: restore the original branch if Step 2 changed it, pop the stash only if the user chose "Stash and continue" in Step 2 (omit that line otherwise), then remove the run's files. The run produces only flat files inside `$GOAT_RUN_DIR`, so `rm -f` + `rmdir` is enough — and `rmdir` fails loudly (rather than silently recursing) if anything unexpected is present. This avoids `rm -rf`, which destructive-command guards block. Because the directory is unique to this run, nothing here can touch a concurrent run's files:
 
 ```bash
 ORIGINAL_BRANCH=$(cat "$GOAT_RUN_DIR/original-branch" 2>/dev/null)
@@ -637,20 +663,35 @@ CURRENT_BRANCH=$(git branch --show-current)
 if [ -n "$ORIGINAL_BRANCH" ] && [ "$CURRENT_BRANCH" != "$ORIGINAL_BRANCH" ]; then
   git checkout "$ORIGINAL_BRANCH"
 fi
-```
-
-If the user chose "Stash and continue" in Step 2, pop the stash after restoring the branch:
-
-```bash
-git stash pop
-```
-
-Remove this run's files, then the directory itself. The run produces only flat files inside `$GOAT_RUN_DIR`, so deleting its contents and `rmdir`-ing it is enough — and `rmdir` fails loudly (rather than silently recursing) if anything unexpected is present. This avoids `rm -rf`, which destructive-command guards block. Because the directory is unique to this run, nothing here can touch a concurrent run's files:
-
-```bash
+git stash pop   # ONLY if "Stash and continue" was chosen in Step 2 — omit otherwise
 rm -f "$GOAT_RUN_DIR"/*
 rmdir "$GOAT_RUN_DIR"
 ```
+
+## Experimental: Forked Review Lenses (optional Step 4 variant)
+
+Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model. Estimated per-lens cost is comparable to a Sonnet agent reading the review pack, with frontier-model quality.
+
+**This path is experimental.** Fork spawning is gated behind `CLAUDE_CODE_FORK_SUBAGENT=1` (staged rollout, semantics may change). Use it only when all of the following hold; otherwise run the standard Step 4:
+
+1. The environment supports it (a test `Agent` call with `subagent_type: "fork"` does not error — on error, fall back silently to standard Step 4).
+2. The review pack is under ~50k tokens (the diff joins the main context for the rest of the run).
+
+How it changes the flow:
+
+- After building the review pack (Step 2.5), Read it into the main conversation so the diff sits in the shared cache prefix.
+- Launch ALL review lenses as forks **in a single message** so every fork shares one cached prefix. Interleaving any other tool call between launches splits the cache.
+- Each fork prompt must begin with hard scoping, because a fork inherits this entire workflow and full tool access:
+
+  ```
+  You are a forked review agent. IGNORE the GOAT orchestration workflow in your
+  context. Do not run other workflow steps, do not launch agents, do not post
+  anything to GitHub. Your only job: <lens description>. The PR diff is already
+  in your context. Report findings per the Agent Output Contract, then stop.
+  ```
+
+- Model tiering does not apply to forks (they inherit the session model). The docs-staleness agent keeps its custom-agent path — forks cannot carry a custom system prompt.
+- **Never fork the Step 8 validation agents.** Validation runs 10-20 minutes after the prefix was cached; the cache has expired by then, and each fork would re-write the full prefix at premium rates. Fresh Sonnet validators are cheaper.
 
 ## Error Handling
 
