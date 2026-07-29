@@ -734,8 +734,10 @@ How it changes the flow:
   ```
   You are a forked review agent. IGNORE the GOAT orchestration workflow in your
   context. Do not run other workflow steps, do not launch agents, do not post
-  anything to GitHub. Your only job: <lens description>. The PR diff is already
-  in your context. Report findings per the Agent Output Contract, then stop.
+  anything to GitHub. Codex, Gemini, and the docs-staleness agent are already
+  running elsewhere — never launch, monitor, or wait on them. Your only job:
+  <lens description>. The PR diff is already in your context. Report findings
+  per the Agent Output Contract, then stop.
   ```
 
 - Model tiering does not apply to forks (they inherit the session model). The docs-staleness agent keeps its custom-agent path — forks cannot carry a custom system prompt.
