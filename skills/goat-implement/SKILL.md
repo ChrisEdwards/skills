@@ -39,7 +39,7 @@ Read the bead in full (`br show`) and follow every reference outward: a Jira key
 Read the repo's own conventions before touching the tracker or git, and let them override everything in this step. With no repo guidance, use these defaults:
 
 - Set the issue in progress (bead → `in_progress`; Jira → In Progress, assigned to the current user).
-- Create the branch. Prefer the repo's pr-tools skills if present, and stack the branch when the repo signals a stacked base (e.g. a `stacked-branch` label); otherwise branch off the default branch. Name it from the Jira key plus a kebab-case slug (e.g. `aiml-1145-add-test-skill`).
+- Create the branch. Prefer the repo's pr-tools skills if present, and stack the branch when the repo signals a stacked base (e.g. a `stacked-branch` label); otherwise branch off the default branch. Name it from the Jira key plus a kebab-case slug (e.g. `AILM-1145-add-test-skill`).
 
 ### 4. Implement
 
