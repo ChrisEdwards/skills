@@ -45,10 +45,12 @@ Accept a PR URL as the skill argument. If none provided, determine if there is a
 Extract metadata, the file count, and the changed-file list in ONE Bash call. Every main-loop tool call re-reads the entire cached conversation, so batching commands is a direct cost lever — measured runs spent several dollars purely on cache reads from tiny sequential Bash steps:
 
 ```bash
-gh pr view "<PR_URL>" --json title,baseRefName,headRefName,additions,deletions,number,url,files --jq '{title,baseRefName,headRefName,additions,deletions,number,url,fileCount:(.files|length),files:[.files[].path]}'
+gh pr view "<PR_URL>" --json title,baseRefName,headRefName,additions,deletions,number,url,files,reviews,comments --jq '{title,baseRefName,headRefName,additions,deletions,number,url,fileCount:(.files|length),files:[.files[].path],hasPriorActivity:(((.reviews//[])|length)>0 or ((.comments//[])|length)>0)}'
 ```
 
-Extract: `BASE_BRANCH`, `HEAD_BRANCH`, `PR_NUM`, `PR_TITLE`, `REPO` (from URL path), plus the changed-file list used by the scan below.
+Extract: `BASE_BRANCH`, `HEAD_BRANCH`, `PR_NUM`, `PR_TITLE`, `REPO` (from URL path), `HAS_PRIOR_ACTIVITY`, plus the changed-file list used by the scan below.
+
+`HAS_PRIOR_ACTIVITY` is a boolean flag only. Do NOT fetch the actual review threads or comment bodies yet — that happens in Step 5, deliberately after the review lenses are already running, so the lenses never see prior decisions (see the Decision Context Fetch there for why).
 
 #### Cross-Repository Impact Scan
 
@@ -68,7 +70,7 @@ Most PRs implement a tracked unit of work — a ticket, issue, or story in whate
 
 1. Scan the branch name, PR title, and PR body for a work-item reference: an issue key (`ABC-123`), a "Fixes #123" / "Closes #123" link, or a URL to any tracker.
 2. Fetch it with whatever access is available — a connected MCP tool for the tracker, a tracker CLI, `gh issue view` for GitHub issues, or WebFetch for a reachable URL. Never invent ticket content you could not fetch.
-3. Distill it into a compact `WORK_ITEM_CONTEXT` block (30 lines max): id, title, goal, requirements/acceptance criteria, and any explicit out-of-scope notes. Compactness matters — this block goes into the shared review pack that every agent reads.
+3. Distill it into a compact `WORK_ITEM_CONTEXT` block (30 lines max): id, title, goal, requirements/acceptance criteria, and any explicit out-of-scope notes. Build this block from the ticket's description and fields only — do NOT include ticket comments. Comments carry scope decisions and authorizations that must stay out of lens view; they are fetched orchestrator-only in Step 5. Compactness matters — this block goes into the shared review pack that every agent reads.
 
 If no reference exists or the lookup fails, record `WORK_ITEM_CONTEXT` as empty, note it in the final report, and continue.
 
@@ -81,6 +83,7 @@ Title: <PR_TITLE>
 Branch: <HEAD_BRANCH> → <BASE_BRANCH>
 Files: <count> (+<adds> -<dels>)
 Work item: <id + title, or "none found">
+Prior review activity: <yes | no>
 Cross-repo surfaces: <list, or "none detected">
 ━━━━━━━━━━━━━━━━━━━
 ```
@@ -186,33 +189,36 @@ The agent's system prompt already contains the full investigation checklist and 
 
 **Create a TodoWrite item per agent before you start and mark each done only after it has actually run**, then attribute every finding to the agent that produced it.
 
-The roster below is deliberately small. It was consolidated from a ~20-lens roster after measuring 170 posted findings across 29 PRs: the lenses removed produced zero unique MEDIUM+ findings, and half of all posted comments were nitpick/LOW noise. Do not add extra review agents beyond this roster and its conditionals.
+The roster is deliberately small, and every Claude lens except one must earn its slot from the diff. The original ~20-lens roster was consolidated after measuring 170 posted findings across 29 PRs: the lenses removed produced zero unique MEDIUM+ findings, and half of all posted comments were nitpick/LOW noise. A later disposition study of a posted review found the author declined half of the findings, nearly all from lenses running outside their strength — so the always-on set is now minimal and every other lens is gated on diff content. Do not add extra review agents beyond this roster and its conditionals.
 
 #### Roster Selection
 
 Size the roster to the diff before launching anything:
 
-- **Lite roster** — the diff has fewer than ~50 changed executable lines AND touches no risk domain (auth, payments, data mutations, migrations, external APIs, serialization). Run only the built-in `/review` and `project-standards-reviewer`. Codex and Gemini from Step 3 still provide the cross-model check.
-- **Full roster** — everything else. Run all six core agents plus any conditional agents whose trigger matches.
+- **Lite roster** — the diff has fewer than ~50 changed executable lines AND touches no risk domain (auth, payments, data mutations, migrations, external APIs, serialization). Run only the built-in `/review`, plus `project-standards-reviewer` when standards files exist. Codex and Gemini from Step 3 still provide the cross-model check.
+- **Full roster** — everything else. Run the core plus every conditional lens whose gate fires.
 
-#### Core Agents (full roster, run in parallel)
+**Announce the team.** After selecting, print one line per conditional lens that runs, naming the actual reason ("performance: PR changes cache eviction policy"), and one line for each headline lens that was skipped ("security: no security surface in this diff"). The gates stay honest only if the choices are visible.
 
-1. Built-in `/review`
-2. Built-in `/security-review`
-3. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation.
-4. `testing-reviewer` — test coverage gaps, weak assertions, brittle implementation-coupled tests, missing edge cases, tautological tests, and coverage gaming.
-5. `project-standards-reviewer` — audits changes against the target repo's own standards (CLAUDE.md, AGENTS.md, linter configs, contributing docs). Locate the standards file paths first and pass the path list in the prompt; the agent reads them itself.
-6. `maintainability-reviewer` — structural quality, complexity, coupling, naming, dead code, duplication, YAGNI violations, and simplification opportunities. This one agent owns the entire style/structure axis (it replaces separate clean-code, simplicity, and architecture reviewers, which historically produced no unique substantive findings). Instruct it: duplication with a concrete consolidation target (two or more named sites that can collapse into one function, constant, or type) rates MEDIUM, not LOW — those findings change code and get acted on; they are not style notes.
+#### Core (full roster, always run)
 
-#### Conditional Agents
+1. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation.
 
-Add these only when the diff content (not just file paths) warrants:
+That is the entire always-on Claude core. Codex and Gemini (Step 3) provide the independent cross-model check, and the docs-staleness agent (Step 3c) runs in the background. The built-in `/review` generalist runs only on the lite roster — with the specialists below available, it produces pure overlap.
 
+#### Conditional Lenses
+
+Gate each on diff content, not file paths alone. When a gate is ambiguous, the security lens fails open (run it); every other lens fails closed (skip it).
+
+- Built-in `/security-review` — the diff touches auth/authz, session handling, permission checks, user-input parsing or deserialization, secrets, crypto, queries built from user input, or a network/trust boundary. **Fails open: unsure means run.** Skip only diffs confidently free of security surface (pure refactors, docs, test-only changes).
+- `testing-reviewer` — the diff changes test files or test infrastructure, OR changes meaningful runtime behavior (new or changed branches, state mutation, error handling, API behavior) without corresponding test work. In practice this fires on most real PRs; production-file presence alone does not fire it. Hunts coverage gaps, weak assertions, brittle implementation-coupled tests, tautological tests, and coverage gaming.
+- `project-standards-reviewer` — locate the repo's standards files first (CLAUDE.md and AGENTS.md at any directory level, linter configs, contributing docs) and pass the path list in the prompt; the agent reads them itself. If the search finds no applicable standards files, skip the lens and disclose the skip in the report. Scope it to exactly two finding types: (a) a violation of a rule actually written in those files, and (b) a regression — the diff removes or degrades something that existed (logging, metrics, error detail, docs, guardrails). Style preferences with no written rule behind them are minor notes at most.
+- `maintainability-reviewer` — the diff is structural work: a substantial refactor, new abstractions, file moves, coupling or type-boundary changes, or roughly 200+ changed executable lines. This one lens owns the entire style/structure axis; never add separate clean-code, simplicity, or architecture reviewers. Small behavior-focused diffs skip it — structure opinions on those are noise the author declines.
 - `reliability-reviewer` — error handling, retries, circuit breakers, timeouts, health checks, background jobs, async handlers.
 - `api-contract-reviewer` — API routes, request/response types, serialization, versioning, exported type signatures.
 - `data-migration-reviewer` — migration files, schema changes, backfills, data transformations, deploy-window safety.
 - `performance-reviewer` — database queries, loop-heavy data transforms, caching layers, I/O-intensive paths.
-- `previous-comments-reviewer` — only when the PR already has prior review feedback to verify was addressed.
+- `previous-comments-reviewer` — only when `HAS_PRIOR_ACTIVITY` is true AND the PR has new commits since that feedback. Its sole job is verifying prior feedback actually landed: dropped threads, partial fixes (the author did X but not Y), and fixes reverted by later commits. It never flags suggestions the author declined, self-review notes, or discussions that concluded without a change request — settled items belong to the Step 8 disposition pass, not to re-litigation here. It fetches the threads itself inside its own context, so the other lenses stay blind to them.
 
 #### Agent Input Contract
 
@@ -228,17 +234,17 @@ This replaces per-agent re-derivation of the diff, which past-run transcripts sh
 
 #### Work Item Context for Reviewers
 
-The work item block travels inside the review pack, so do not paste it into prompts. If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, add these instructions to the prompts of `/review`, `correctness-adversarial-reviewer`, and `testing-reviewer`:
+The work item block travels inside the review pack, so do not paste it into prompts. If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, add these instructions to the prompts of `correctness-adversarial-reviewer` and `testing-reviewer` (and the built-in `/review` when the lite roster runs):
 
 - `correctness-adversarial-reviewer`: verify the implementation actually satisfies each stated requirement and acceptance criterion. A requirement that is unmet, partially met, or silently reinterpreted is a finding — HIGH if the PR claims to complete the work item. Also flag implemented behavior the work item explicitly ruled out of scope.
 - `testing-reviewer`: check that each acceptance criterion has a test exercising it. An untested acceptance criterion is a finding, not a minor note.
-- `/review`: use it as intent context when judging whether the change does what it set out to do.
+- `/review` (lite roster only): use it as intent context when judging whether the change does what it set out to do.
 
-Only those three agents get the added instructions — intent context doesn't change the style/standards reviews.
+Only those agents get the added instructions — intent context doesn't change the standards or structure reviews.
 
 #### Model Tiering
 
-Only two lenses inherit the session-default frontier model: `correctness-adversarial-reviewer` and the built-in `/security-review`. Launch EVERY other Claude agent with `model: "sonnet"` on the Agent tool: built-in `/review`, `testing-reviewer`, `project-standards-reviewer`, `maintainability-reviewer`, all conditional agents, the docs-staleness agent (Step 3c), the cross-repo agent (Step 7), and all validation agents (Step 8).
+Only two lenses inherit the session-default frontier model: `correctness-adversarial-reviewer` and the built-in `/security-review` (when its gate selects it). Launch EVERY other Claude agent with `model: "sonnet"` on the Agent tool: the built-in `/review` (lite roster), `testing-reviewer`, `project-standards-reviewer`, `maintainability-reviewer`, all other conditional agents, the docs-staleness agent (Step 3c), the cross-repo agent (Step 7), and all validation agents (Step 8).
 
 This is not optional. Transcript analysis of past runs showed most agents silently inheriting the frontier model, which multiplied cost 2-3x. Codex and Gemini already provide the independent frontier-model cross-check, so the tiered lenses lose little — their job is coverage, not depth.
 
@@ -261,6 +267,21 @@ This keeps consolidation cheap: the orchestrator merges compact structured findi
 ### Step 5: Collect Background Results
 
 After the Step 4 review agents complete and the Gemini background task finishes, read the Gemini output. Then wait for Codex (which runs as a detached process and may take up to 15 minutes). Also collect the Docs Staleness agent results.
+
+#### Decision Context Fetch (orchestrator-only)
+
+While waiting on Codex, fetch the decision history the lenses were deliberately not shown. Lenses stay blind to prior decisions by design: a lens told "this was already accepted" is primed to under-scrutinize that code, and the acceptance itself might be wrong. Finding problems is the lens's job; filtering by disposition is the orchestrator's. So this context is fetched only now, after every lens is already running, and is never added to the review pack or any lens prompt.
+
+If `HAS_PRIOR_ACTIVITY` is true, fetch the PR threads in one batch:
+
+```bash
+gh pr view <PR_NUM> --json reviews,comments
+gh api "repos/<REPO>/pulls/<PR_NUM>/comments" --paginate
+```
+
+Also fetch the work item's comments using the same tracker access as Step 1, whenever a work item was found — scope changes and authorizations usually land in a late comment, and a review that reads only the ticket description will flag work the team already approved.
+
+Distill a `PRIOR_DECISIONS` block: one line per finding-shaped item the author has already answered (including in self-review) — what was raised, the author's disposition (fixed / accepted tradeoff / declined), and the stated rationale — plus one line, with date, per ticket comment that changes scope or authorizes extra work. This block feeds the Step 8 disposition pass. If there is no prior activity and the work item has no comments, record it as empty.
 
 **Gemini** (should be done by now — read directly):
 
@@ -356,7 +377,7 @@ After this step completes, merge any new findings into the consolidated findings
 
 Before producing the final report, **YOU MUST DISPATCH VALIDATION AGENTS** to validate every CRITICAL and HIGH finding **that only one engine flagged** against the broader codebase and any upstream/downstream systems. The goal is to eliminate false positives so the final report only contains real, actionable issues.
 
-Findings corroborated by 2+ **distinct engines** (Claude, Codex, Gemini, docs staleness — engines, not Claude sub-agents; five Claude agents agreeing is still one engine) skip validation and are treated as CONFIRMED. They were found independently by separately trained models, which is stronger evidence than one more Claude pass.
+Findings corroborated by 2+ **distinct engines** (Claude, Codex, Gemini, docs staleness — engines, not Claude sub-agents; five Claude agents agreeing is still one engine) skip validation and are treated as CONFIRMED. They were found independently by separately trained models, which is stronger evidence than one more Claude pass. But consensus skips technical validation only: it proves the code reads that way, not that the author will act on it. Every finding, consensus included, still goes through the Disposition Pass below.
 
 Single-engine MEDIUM findings also skip validation. Under the per-finding verdict logic they resolve to CONSIDER either way, so validating them spends tokens without changing the report's disposition. LOW findings skip validation as before (SKIP verdicts).
 
@@ -371,6 +392,7 @@ Each validation agent receives all the findings in its batch plus the PR context
 
 1. The finding ID, title, file, line, severity, issue description, and which engines flagged it
 2. Instructions to investigate each finding using the two-phase approach below
+3. This framing, verbatim: "False positives are common. Reject a finding when the cited code does not prove it, when it predates and is unaffected by this diff, when surrounding code already handles it, or when it is an unsupported preference rather than a defect."
 
 #### Two-Phase Validation Per Finding
 
@@ -391,6 +413,7 @@ Each validation agent receives all the findings in its batch plus the PR context
 - Is the "race condition" impossible because of request sequencing or locking at a higher layer?
 - Is the "missing validation" already handled by a framework interceptor, filter, or annotation?
 - Is the "duplication" intentional because the two paths serve different callers with different contracts?
+- Does other code in the same file already do the same thing? Before confirming any "this line is wrong" finding, read the other call sites of the same constructor or method — an established sibling pattern usually means the behavior is intentional, and a review that flags one instance without noticing the convention is wrong in a way the author will point out.
 - Does config, a feature flag, or a deployment constraint eliminate the scenario in practice?
 
 The agent should actively try to disprove the finding before confirming it.
@@ -411,6 +434,16 @@ After all validation agents return:
 - **Adjust severity** for any DOWNGRADED finding.
 - **Keep** all CONFIRMED findings at their original severity.
 - Recalculate the consensus counts and overall verdict based on the surviving findings.
+
+#### Disposition Pass (every finding, orchestrator-only)
+
+Technical truth is not the posting bar — whether the author will act is. After validation, check every surviving CRITICAL/HIGH/MEDIUM finding against the `PRIOR_DECISIONS` block from Step 5. This includes multi-engine CONFIRMED findings: consensus proves the code reads that way, not that the author will act. No subagents are needed — everything required is already in context. Three questions:
+
+1. **Already settled?** The finding matches an item the author already answered, including in a self-review round. Suppress it. Re-raising a settled item is allowed only with concrete new evidence the author demonstrably did not consider, and the posted comment must name that evidence, acknowledge the prior decision, and never carry a higher severity than the original round.
+2. **Already authorized?** The finding objects to scope, and a ticket comment authorized that scope. Suppress it — this is the review being wrong on the facts, not a judgment call.
+3. **Established local pattern?** The finding says a line does the wrong thing, but a sibling call site in the same file deliberately does the same thing and validation did not already catch it. Suppress it, or reframe it as a LOW question about whether the convention is documented.
+
+Suppressed findings are removed from the posted review but stay in the on-screen report under the SUPPRESSED section, one line each with the reason, so the user can audit what the filter removed.
 
 ### Step 9: Output the Consolidated Report
 
@@ -475,6 +508,13 @@ LOW (<count>) — Optional improvements
      Flagged by: <engines>
      Issue: <description>
      Verdict: SKIP — <reason>
+
+━━━ SUPPRESSED (disposition pass) ━━━
+
+  <One line per suppressed finding: title — reason
+   (settled in prior round | authorized in ticket comment |
+   established local pattern). Omit this section when
+   nothing was suppressed.>
 
 ━━━ DOCS STALENESS ━━━
 
@@ -598,6 +638,8 @@ This creates one review with all inline comments attached, rather than posting c
 </details>
 ```
 
+**Advisory structure and style findings never post inline, regardless of consensus.** A finding whose impact is structural — naming, mutability, duplication, extract-a-class suggestions, code organization — goes into the same collapsed block unless it cites a rule actually written in the repo's standards files (CLAUDE.md, AGENTS.md, linter configs) or a concrete functional defect. Multi-engine agreement does not rescue it: three models sharing a taste preference is still a taste preference, and authors decline this class of inline comment almost every time. Inline MEDIUM comments are reserved for findings with functional consequence — correctness, data integrity, security, performance, missing tests, lost observability.
+
 Each inline comment must clearly explain the issue and attribute the source model(s). Use this format:
 
 ```
@@ -686,13 +728,16 @@ How it changes the flow:
 
 - After building the review pack (Step 2.5), Read it into the main conversation so the diff sits in the shared cache prefix.
 - Launch ALL review lenses as forks **in a single message** so every fork shares one cached prefix. Interleaving any other tool call between launches splits the cache.
+- Launch the forks BEFORE the Step 5 Decision Context Fetch. Forks inherit the entire main conversation, so any prior-decision or ticket-comment content loaded before the launch leaks into every lens and breaks their deliberate blindness. This ordering matters only on the fork path (fresh agents see only their prompt and the pack), but keep it on both paths for uniformity.
 - Each fork prompt must begin with hard scoping, because a fork inherits this entire workflow and full tool access:
 
   ```
   You are a forked review agent. IGNORE the GOAT orchestration workflow in your
   context. Do not run other workflow steps, do not launch agents, do not post
-  anything to GitHub. Your only job: <lens description>. The PR diff is already
-  in your context. Report findings per the Agent Output Contract, then stop.
+  anything to GitHub. Codex, Gemini, and the docs-staleness agent are already
+  running elsewhere — never launch, monitor, or wait on them. Your only job:
+  <lens description>. The PR diff is already in your context. Report findings
+  per the Agent Output Contract, then stop.
   ```
 
 - Model tiering does not apply to forks (they inherit the session model). The docs-staleness agent keeps its custom-agent path — forks cannot carry a custom system prompt.
