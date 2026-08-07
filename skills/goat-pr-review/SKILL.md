@@ -16,6 +16,13 @@ The Greatest Of All Time code review. Three AI models plus a documentation stale
 
 Verify before starting: `gh` CLI authenticated, `codex` installed, `gemini` installed. If Codex or Gemini is missing, warn and continue with available engines.
 
+## Configuration
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GOAT_SKIP_CODEX` | unset | Set to any non-empty value to skip the Codex leg entirely. The skill marks Codex as SKIPPED in the report and adjusts consensus counts to use the remaining engines. |
+| `GOAT_SKIP_GEMINI` | unset | Set to any non-empty value to skip the Gemini leg entirely. The skill marks Gemini as SKIPPED in the report and adjusts consensus counts to use the remaining engines. |
+
 ## Workflow
 
 Use the TodoWrite tool to track your todo items. Don't stop prematurely.
@@ -140,9 +147,11 @@ Substitute the literal values (heredoc-style expansion of `WORK_ITEM_CONTEXT` is
 
 The pack is the input contract for every Claude agent launched in Steps 3c, 4, 7, and 8.
 
-**Send Codex, Gemini, and the Docs Staleness agent as three parallel tool calls in one message.** Wait for the tool results to return, then proceed to Step 4.
+**Send the enabled external engines (Codex unless `GOAT_SKIP_CODEX` is set, Gemini unless `GOAT_SKIP_GEMINI` is set) and the Docs Staleness agent as parallel tool calls in one message.** Wait for the tool results to return, then proceed to Step 4.
 
 #### 3a. Codex CLI (detached)
+
+**Skip this substep entirely if `GOAT_SKIP_CODEX` is set.** Mark Codex as SKIPPED in the report and do not launch the process or create the output/pid files.
 
 Codex reviews can take 10-15 minutes on large PRs, which exceeds the Bash tool's 10-minute timeout. Launch as a detached process instead:
 
@@ -157,6 +166,8 @@ Run with `run_in_background: false` (it returns immediately after disown). Do NO
 The `tr` filter is mandatory. Raw Codex output contains NUL and other control bytes, and if they enter model context as a tool result, every subsequent API call fails with a 400 error and the session is permanently wedged. The recorded PID belongs to the filter at the end of the pipeline, which exits when Codex does, so the Step 5 monitor works unchanged. If the 20-minute timeout forces a kill, Codex itself dies on its next write.
 
 #### 3b. Gemini CLI (background)
+
+**Skip this substep entirely if `GOAT_SKIP_GEMINI` is set.** Mark Gemini as SKIPPED in the report and do not launch the script or create the output file.
 
 ```bash
 ~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt"
@@ -283,7 +294,7 @@ Also fetch the work item's comments using the same tracker access as Step 1, whe
 
 Distill a `PRIOR_DECISIONS` block: one line per finding-shaped item the author has already answered (including in self-review) — what was raised, the author's disposition (fixed / accepted tradeoff / declined), and the stated rationale — plus one line, with date, per ticket comment that changes scope or authorizes extra work. This block feeds the Step 8 disposition pass. If there is no prior activity and the work item has no comments, record it as empty.
 
-**Gemini** (should be done by now — read directly):
+**Gemini** — if `GOAT_SKIP_GEMINI` was set, Gemini was never launched; record it as SKIPPED and move on. Otherwise it should be done by now — read directly:
 
 ```bash
 cat "$GOAT_RUN_DIR/gemini-review.txt"
@@ -291,7 +302,7 @@ cat "$GOAT_RUN_DIR/gemini-review.txt"
 
 **Docs Staleness** — the background Agent should be done by now. Its result is returned directly as the agent's response text. If the agent returned `NO_STALE_DOCS_FOUND`, record the docs engine as OK with zero findings. Otherwise, parse its structured findings and add them to the consolidated findings list in Step 6.
 
-**Codex** — use Monitor to wait for the detached process to finish:
+**Codex** — if `GOAT_SKIP_CODEX` was set, Codex was never launched; record it as SKIPPED and move on. Otherwise use Monitor to wait for the detached process to finish:
 
 ```bash
 # Monitor: watch for Codex completion (poll every 30s, up to 20 min)
@@ -457,8 +468,8 @@ Produce this exact format:
 
 REVIEW SOURCES
   Claude (<one line per agent run>)  .... <status: OK | FAILED>
-  Codex  (review)            .... <status: OK | FAILED>
-  Gemini (code-review)       .... <status: OK | FAILED>
+  Codex  (review)            .... <status: OK | FAILED | SKIPPED>
+  Gemini (code-review)       .... <status: OK | FAILED | SKIPPED>
   Docs Staleness (reviewer)  .... <status: OK | FAILED | NO STALE DOCS>
   Roster: <full | lite — reason>
   Lenses: <forked | standard — reason>
@@ -524,9 +535,11 @@ LOW (<count>) — Optional improvements
 
 ━━━ CONSENSUS ━━━
 
-  3/3+ engines agree: <count> findings
-  2/3+ engines agree: <count> findings
-  Single engine:      <count> findings
+  <N>/<N>  engines agree: <count> findings
+  2/<N>+ engines agree: <count> findings
+  Single engine:       <count> findings
+
+  (where N = number of active engines: 3 when all run, fewer when engines are skipped)
 
 ━━━ VERDICT ━━━
 
@@ -749,6 +762,8 @@ How it changes the flow:
 |----------|--------|
 | `codex` not installed | Warn, skip Codex leg, mark as SKIPPED |
 | `gemini` not installed | Warn, skip Gemini leg, mark as SKIPPED |
+| `GOAT_SKIP_CODEX` set | Skip Codex leg, mark as SKIPPED |
+| `GOAT_SKIP_GEMINI` set | Skip Gemini leg, mark as SKIPPED |
 | `gh` not authenticated | Tell user to run `gh auth login`, abort |
 | PR URL invalid | Ask user for correct URL |
 | Codex process still running after 20 min | Kill PID, mark as TIMEOUT in report |
