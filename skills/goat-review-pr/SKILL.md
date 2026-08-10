@@ -255,9 +255,14 @@ Only those agents get the added instructions — intent context doesn't change t
 
 #### Model Tiering
 
-Only two lenses inherit the session-default frontier model: `correctness-adversarial-reviewer` and the built-in `/security-review` (when its gate selects it). Launch EVERY other Claude agent with `model: "sonnet"` on the Agent tool: the built-in `/review` (lite roster), `testing-reviewer`, `project-standards-reviewer`, `maintainability-reviewer`, all other conditional agents, the docs-staleness agent (Step 3c), the cross-repo agent (Step 7), and all validation agents (Step 8).
+**Review lenses inherit the session model by default.** Do NOT pass a `model:` override on any review lens agent (core or conditional). The lenses are the skill's primary output, and downgrading them loses the depth that justifies running the skill. Omitting `model:` on the Agent tool makes the agent inherit the caller's model automatically.
 
-This is not optional. Transcript analysis of past runs showed most agents silently inheriting the frontier model, which multiplied cost 2-3x. Codex and Gemini already provide the independent frontier-model cross-check, so the tiered lenses lose little — their job is coverage, not depth.
+**Utility and support agents use Sonnet** to save cost on mechanical work that does not benefit from frontier reasoning. Pass `model: "sonnet"` on these agents only:
+- The docs-staleness agent (Step 3c)
+- The cross-repo impact agent (Step 7, `subagent_type: "Explore"`)
+- All validation agents (Step 8, `subagent_type: "Explore"`)
+
+This split keeps the review lenses at the user's chosen quality tier while containing cost on the support fleet.
 
 #### Agent Output Contract
 
@@ -753,7 +758,7 @@ How it changes the flow:
   per the Agent Output Contract, then stop.
   ```
 
-- Model tiering does not apply to forks (they inherit the session model). The docs-staleness agent keeps its custom-agent path — forks cannot carry a custom system prompt.
+- Forks inherit the session model, which matches the standard path (review lenses always run at the session model). The docs-staleness agent keeps its custom-agent path with `model: "sonnet"` — forks cannot carry a custom system prompt.
 - **Never fork the Step 8 validation agents.** Validation runs 10-20 minutes after the prefix was cached; the cache has expired by then, and each fork would re-write the full prefix at premium rates. Fresh Sonnet validators are cheaper.
 
 ## Error Handling
