@@ -257,12 +257,13 @@ Only those agents get the added instructions — intent context doesn't change t
 
 **Review lenses inherit the session model by default.** Do NOT pass a `model:` override on any review lens agent (core or conditional). The lenses are the skill's primary output, and downgrading them loses the depth that justifies running the skill. Omitting `model:` on the Agent tool makes the agent inherit the caller's model automatically.
 
+**Validation agents (Step 8) also inherit the session model.** Do NOT pass a `model:` override on them. Validation is judgment work, and a weaker validator waves through the false premises and bad fixes it exists to catch.
+
 **Utility and support agents use Sonnet** to save cost on mechanical work that does not benefit from frontier reasoning. Pass `model: "sonnet"` on these agents only:
 - The docs-staleness agent (Step 3c)
 - The cross-repo impact agent (Step 7, `subagent_type: "Explore"`)
-- All validation agents (Step 8, `subagent_type: "Explore"`)
 
-This split keeps the review lenses at the user's chosen quality tier while containing cost on the support fleet.
+This split keeps the review lenses and validators at the user's chosen quality tier while containing cost on the support fleet.
 
 #### Agent Output Contract
 
@@ -399,7 +400,7 @@ Single-engine MEDIUM findings get a lighter check. They are still posted as mino
 
 #### Dispatching Validation Agents
 
-Group the work into batches: single-engine CRITICAL/HIGH findings (two-phase), single-engine MEDIUMs (Phase 1 only), and consensus findings that carry a suggested fix (Fix Verification only). Dispatch the batches to parallel subagents (Agent tool with `subagent_type: "Explore"`, `model: "sonnet"`). Each agent prompt must begin with the Agent Input Contract block (Step 4). Use these rules for batching:
+Group the work into batches: single-engine CRITICAL/HIGH findings (two-phase), single-engine MEDIUMs (Phase 1 only), and consensus findings that carry a suggested fix (Fix Verification only). Dispatch the batches to parallel subagents (Agent tool with `subagent_type: "Explore"`, no `model:` override so they inherit the session model). Each agent prompt must begin with the Agent Input Contract block (Step 4). Use these rules for batching:
 
 - **1-5 findings total** — one validation agent handles all of them
 - **6+ findings** — split into 2 agents (roughly equal batches)
