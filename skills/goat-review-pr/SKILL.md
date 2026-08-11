@@ -169,13 +169,17 @@ The `tr` filter is mandatory. Raw Codex output contains NUL and other control by
 
 **Skip this substep entirely if `GOAT_SKIP_GEMINI` is set.** Mark Gemini as SKIPPED in the report and do not launch the script or create the output file.
 
+**Always pass an explicit prompt built on the review pack.** Never send the bare `/code-review` default: that command picks its own base (the merge-base with `origin/HEAD`), which reviews the wrong diff whenever the PR's base is not the default branch (stacked PRs) or local refs drift. Substitute the literal values:
+
 ```bash
-~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt"
+~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt" "@<GOAT_RUN_DIR>/review-pack.md
+
+Review the pull request above (<REPO>#<PR_NUM>, branch <HEAD_BRANCH> -> <BASE_BRANCH>). The review pack contains the PR metadata, changed-file list, and the complete diff against the PR's true base branch. Review ONLY the changes in that diff. Do NOT run git diff yourself and do NOT compare against origin/HEAD or main, since on stacked PRs those include other PRs' changes. Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description, and a one-line suggested fix. Then a Minor notes list (max 5, one line each). No preamble."
 ```
 
 Run with `run_in_background: true` and `timeout: 600000` (10 min).
 
-The gemini invocation lives in the bundled `gemini-review.sh` (alongside this skill) rather than inline, so it is a single reviewed artifact. The script takes the output-file path as its first argument and defaults the prompt to `/code-review`. Edit the gemini flags inside the script (e.g. the auto-approval flag headless review needs) rather than here.
+The gemini invocation lives in the bundled `gemini-review.sh` (alongside this skill) rather than inline, so it is a single reviewed artifact. The script takes the output-file path as its first argument and the prompt as its second. Edit the gemini flags inside the script (e.g. the auto-approval flag headless review needs) rather than here.
 
 #### 3c. Documentation Staleness Reviewer (subagent)
 
