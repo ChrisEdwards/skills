@@ -12,6 +12,10 @@ description: >-
 
 The Greatest Of All Time code review. Three AI models plus a documentation staleness reviewer, all running in parallel, one consolidated report.
 
+## Cost Control
+
+**Never call the advisor tool.** This applies to the orchestrator and every subagent, fork, and validation agent in this skill. The advisor round-trips the full conversation to a stronger model, and in a multi-agent review with large diffs that cost compounds fast. All review judgment stays within the agents themselves.
+
 ## Prerequisites
 
 Verify before starting: `gh` CLI authenticated, `codex` installed, `gemini` installed. If Codex or Gemini is missing, warn and continue with available engines.
@@ -242,6 +246,7 @@ Every review agent prompt in this step — and the cross-repo (Step 7) and valid
 Read <GOAT_RUN_DIR>/review-pack.md first. It contains the PR metadata, work item,
 changed-file list, and full diff. Do NOT re-fetch the diff with git or gh.
 Read source files only when you need context beyond the diff.
+Do NOT call the advisor tool at any point during this review.
 ```
 
 This replaces per-agent re-derivation of the diff, which past-run transcripts showed was the skill's largest token cost.
@@ -768,10 +773,10 @@ How it changes the flow:
   ```
   You are a forked review agent. IGNORE the GOAT orchestration workflow in your
   context. Do not run other workflow steps, do not launch agents, do not post
-  anything to GitHub. Codex, Gemini, and the docs-staleness agent are already
-  running elsewhere — never launch, monitor, or wait on them. Your only job:
-  <lens description>. The PR diff is already in your context. Report findings
-  per the Agent Output Contract, then stop.
+  anything to GitHub. Do NOT call the advisor tool. Codex, Gemini, and the
+  docs-staleness agent are already running elsewhere — never launch, monitor,
+  or wait on them. Your only job: <lens description>. The PR diff is already
+  in your context. Report findings per the Agent Output Contract, then stop.
   ```
 
 - Forks inherit the session model, which matches the standard path (review lenses always run at the session model). The docs-staleness agent keeps its custom-agent path with `model: "sonnet"` — forks cannot carry a custom system prompt.
