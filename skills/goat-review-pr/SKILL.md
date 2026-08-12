@@ -32,8 +32,7 @@ Use the TodoWrite tool to track your todo items. Don't stop prematurely.
 Before anything else, create one private directory for this review. Every temp file the run produces lives inside it. Use `mktemp -d`, which creates the directory atomically with an OS-guaranteed-unique name, so two reviews running at the same instant can never share a path or clobber each other's files.
 
 ```bash
-TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"   # strip trailing slash (macOS TMPDIR has one)
-GOAT_RUN_DIR=$(mktemp -d "$TMPBASE/goat-XXXXXXXX")
+GOAT_RUN_DIR=$(mktemp -d /tmp/goat-XXXXXXXX)
 echo "$GOAT_RUN_DIR"
 ```
 
