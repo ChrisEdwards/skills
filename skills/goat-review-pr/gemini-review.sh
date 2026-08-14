@@ -9,7 +9,11 @@
 #   gemini-review.sh <output-file> [prompt]
 #
 #   <output-file>  Path to write the review (stdout+stderr) to. Required.
-#   [prompt]       Prompt to send. Defaults to the /code-review slash command.
+#   [prompt]       Prompt to send. Defaults to the /code-review slash command,
+#                  which diffs against the merge-base with origin/HEAD — the
+#                  wrong base for stacked PRs. Callers should always pass an
+#                  explicit prompt that includes the diff to review (the skill
+#                  passes @<run-dir>/review-pack.md).
 #
 # Runs synchronously and writes everything to <output-file>; the caller is
 # expected to background the invocation (run_in_background: true).

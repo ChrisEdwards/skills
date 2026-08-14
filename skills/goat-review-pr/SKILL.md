@@ -12,6 +12,10 @@ description: >-
 
 The Greatest Of All Time code review. Three AI models plus a documentation staleness reviewer, all running in parallel, one consolidated report.
 
+## Cost Control
+
+**Never call the advisor tool.** This applies to the orchestrator and every subagent, fork, and validation agent in this skill. The advisor round-trips the full conversation to a stronger model, and in a multi-agent review with large diffs that cost compounds fast. All review judgment stays within the agents themselves.
+
 ## Prerequisites
 
 Verify before starting: `gh` CLI authenticated, `codex` installed, `gemini` installed. If Codex or Gemini is missing, warn and continue with available engines.
@@ -32,8 +36,7 @@ Use the TodoWrite tool to track your todo items. Don't stop prematurely.
 Before anything else, create one private directory for this review. Every temp file the run produces lives inside it. Use `mktemp -d`, which creates the directory atomically with an OS-guaranteed-unique name, so two reviews running at the same instant can never share a path or clobber each other's files.
 
 ```bash
-TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"   # strip trailing slash (macOS TMPDIR has one)
-GOAT_RUN_DIR=$(mktemp -d "$TMPBASE/goat-XXXXXXXX")
+GOAT_RUN_DIR=$(mktemp -d /tmp/goat-XXXXXXXX)
 echo "$GOAT_RUN_DIR"
 ```
 
@@ -169,13 +172,17 @@ The `tr` filter is mandatory. Raw Codex output contains NUL and other control by
 
 **Skip this substep entirely if `GOAT_SKIP_GEMINI` is set.** Mark Gemini as SKIPPED in the report and do not launch the script or create the output file.
 
+**Always pass an explicit prompt built on the review pack.** Never send the bare `/code-review` default: that command picks its own base (the merge-base with `origin/HEAD`), which reviews the wrong diff whenever the PR's base is not the default branch (stacked PRs) or local refs drift. Substitute the literal values:
+
 ```bash
-~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt"
+~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt" "@<GOAT_RUN_DIR>/review-pack.md
+
+Review the pull request above (<REPO>#<PR_NUM>, branch <HEAD_BRANCH> -> <BASE_BRANCH>). The review pack contains the PR metadata, changed-file list, and the complete diff against the PR's true base branch. Review ONLY the changes in that diff. Do NOT run git diff yourself and do NOT compare against origin/HEAD or main, since on stacked PRs those include other PRs' changes. Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description, and a one-line suggested fix. Then a Minor notes list (max 5, one line each). No preamble."
 ```
 
 Run with `run_in_background: true` and `timeout: 600000` (10 min).
 
-The gemini invocation lives in the bundled `gemini-review.sh` (alongside this skill) rather than inline, so it is a single reviewed artifact. The script takes the output-file path as its first argument and defaults the prompt to `/code-review`. Edit the gemini flags inside the script (e.g. the auto-approval flag headless review needs) rather than here.
+The gemini invocation lives in the bundled `gemini-review.sh` (alongside this skill) rather than inline, so it is a single reviewed artifact. The script takes the output-file path as its first argument and the prompt as its second. Edit the gemini flags inside the script (e.g. the auto-approval flag headless review needs) rather than here.
 
 #### 3c. Documentation Staleness Reviewer (subagent)
 
@@ -239,6 +246,7 @@ Every review agent prompt in this step — and the cross-repo (Step 7) and valid
 Read <GOAT_RUN_DIR>/review-pack.md first. It contains the PR metadata, work item,
 changed-file list, and full diff. Do NOT re-fetch the diff with git or gh.
 Read source files only when you need context beyond the diff.
+Do NOT call the advisor tool at any point during this review.
 ```
 
 This replaces per-agent re-derivation of the diff, which past-run transcripts showed was the skill's largest token cost.
@@ -255,9 +263,15 @@ Only those agents get the added instructions — intent context doesn't change t
 
 #### Model Tiering
 
-Only two lenses inherit the session-default frontier model: `correctness-adversarial-reviewer` and the built-in `/security-review` (when its gate selects it). Launch EVERY other Claude agent with `model: "sonnet"` on the Agent tool: the built-in `/review` (lite roster), `testing-reviewer`, `project-standards-reviewer`, `maintainability-reviewer`, all other conditional agents, the docs-staleness agent (Step 3c), the cross-repo agent (Step 7), and all validation agents (Step 8).
+**Review lenses inherit the session model by default.** Do NOT pass a `model:` override on any review lens agent (core or conditional). The lenses are the skill's primary output, and downgrading them loses the depth that justifies running the skill. Omitting `model:` on the Agent tool makes the agent inherit the caller's model automatically.
 
-This is not optional. Transcript analysis of past runs showed most agents silently inheriting the frontier model, which multiplied cost 2-3x. Codex and Gemini already provide the independent frontier-model cross-check, so the tiered lenses lose little — their job is coverage, not depth.
+**Validation agents (Step 8) also inherit the session model.** Do NOT pass a `model:` override on them. Validation is judgment work, and a weaker validator waves through the false premises and bad fixes it exists to catch.
+
+**Utility and support agents use Sonnet** to save cost on mechanical work that does not benefit from frontier reasoning. Pass `model: "sonnet"` on these agents only:
+- The docs-staleness agent (Step 3c)
+- The cross-repo impact agent (Step 7, `subagent_type: "Explore"`)
+
+This split keeps the review lenses and validators at the user's chosen quality tier while containing cost on the support fleet.
 
 #### Agent Output Contract
 
@@ -388,13 +402,13 @@ After this step completes, merge any new findings into the consolidated findings
 
 Before producing the final report, **YOU MUST DISPATCH VALIDATION AGENTS** to validate every CRITICAL and HIGH finding **that only one engine flagged** against the broader codebase and any upstream/downstream systems. The goal is to eliminate false positives so the final report only contains real, actionable issues.
 
-Findings corroborated by 2+ **distinct engines** (Claude, Codex, Gemini, docs staleness — engines, not Claude sub-agents; five Claude agents agreeing is still one engine) skip validation and are treated as CONFIRMED. They were found independently by separately trained models, which is stronger evidence than one more Claude pass. But consensus skips technical validation only: it proves the code reads that way, not that the author will act on it. Every finding, consensus included, still goes through the Disposition Pass below.
+Findings corroborated by 2+ **distinct engines** (Claude, Codex, Gemini, docs staleness — engines, not Claude sub-agents; five Claude agents agreeing is still one engine) skip validation and are treated as CONFIRMED. They were found independently by separately trained models, which is stronger evidence than one more Claude pass. But consensus skips technical validation only: it proves the code reads that way, not that the author will act on it. Every finding, consensus included, still goes through Fix Verification and the Disposition Pass below.
 
-Single-engine MEDIUM findings also skip validation. Under the per-finding verdict logic they resolve to CONSIDER either way, so validating them spends tokens without changing the report's disposition. LOW findings skip validation as before (SKIP verdicts).
+Single-engine MEDIUM findings get a lighter check. They are still posted as minor notes, so an unvalidated false premise there embarrasses the review the same as one in a HIGH. Batch them into the validation agents with a Phase 1-only instruction (verify the premise, read the collaborator, skip Phase 2). LOW findings skip validation as before (SKIP verdicts).
 
 #### Dispatching Validation Agents
 
-Group the single-engine CRITICAL/HIGH findings into batches and dispatch them to parallel subagents (Agent tool with `subagent_type: "Explore"`, `model: "sonnet"`). Each agent prompt must begin with the Agent Input Contract block (Step 4). Use these rules for batching:
+Group the work into batches: single-engine CRITICAL/HIGH findings (two-phase), single-engine MEDIUMs (Phase 1 only), and consensus findings that carry a suggested fix (Fix Verification only). Dispatch the batches to parallel subagents (Agent tool with `subagent_type: "Explore"`, no `model:` override so they inherit the session model). Each agent prompt must begin with the Agent Input Contract block (Step 4). Use these rules for batching:
 
 - **1-5 findings total** — one validation agent handles all of them
 - **6+ findings** — split into 2 agents (roughly equal batches)
@@ -409,6 +423,7 @@ Each validation agent receives all the findings in its batch plus the PR context
 
 **Phase 1 — Direct Investigation.** For each finding, the agent should:
 
+- **Read the collaborator first.** If the finding's argument depends on what other code does (what a helper returns, what actually reaches a prompt, what a build includes), open that code before accepting the finding. Most false positives are sound reasoning from a false premise about code the reviewer never opened.
 - Read the flagged code and its surrounding context (not just the diff, the full file)
 - Trace callers and callees to understand how the flagged code is actually used
 - Check related systems that interact with this code (other services, shared libraries, database schemas, API contracts, configuration files)
@@ -424,10 +439,20 @@ Each validation agent receives all the findings in its batch plus the PR context
 - Is the "race condition" impossible because of request sequencing or locking at a higher layer?
 - Is the "missing validation" already handled by a framework interceptor, filter, or annotation?
 - Is the "duplication" intentional because the two paths serve different callers with different contracts?
+- Does a code comment at the site, the PR description, or a commit message state the behavior is intentional? The Disposition Pass only checks tracker threads, so this is the one checkpoint for in-code documentation.
 - Does other code in the same file already do the same thing? Before confirming any "this line is wrong" finding, read the other call sites of the same constructor or method — an established sibling pattern usually means the behavior is intentional, and a review that flags one instance without noticing the convention is wrong in a way the author will point out.
 - Does config, a feature flag, or a deployment constraint eliminate the scenario in practice?
 
 The agent should actively try to disprove the finding before confirming it.
+
+#### Fix Verification (every posted fix)
+
+Validating the finding does not validate the fix. Verify every suggested fix that will be posted, consensus findings included (consensus exempts the finding from validation, never the fix, since engines agree on problems but rarely on fixes). Two prongs:
+
+- If the fix names a flag, property, API, or tool, open its definition and check everything it does, not only the part the fix relies on.
+- If the fix promises an outcome, name the exact code path or output field that delivers it. If none can be named, the fix is unproven.
+
+Agents report FIX OK or FIX WRONG (one sentence why) alongside the finding verdict.
 
 #### Validation Agent Output
 
@@ -444,6 +469,7 @@ After all validation agents return:
 - **Remove** any finding marked FALSE POSITIVE from the report entirely. Do not mention it.
 - **Adjust severity** for any DOWNGRADED finding.
 - **Keep** all CONFIRMED findings at their original severity.
+- **Drop or replace** the suggested fix on any FIX WRONG verdict. The finding still posts, the bad fix does not.
 - Recalculate the consensus counts and overall verdict based on the surviving findings.
 
 #### Disposition Pass (every finding, orchestrator-only)
@@ -747,13 +773,13 @@ How it changes the flow:
   ```
   You are a forked review agent. IGNORE the GOAT orchestration workflow in your
   context. Do not run other workflow steps, do not launch agents, do not post
-  anything to GitHub. Codex, Gemini, and the docs-staleness agent are already
-  running elsewhere — never launch, monitor, or wait on them. Your only job:
-  <lens description>. The PR diff is already in your context. Report findings
-  per the Agent Output Contract, then stop.
+  anything to GitHub. Do NOT call the advisor tool. Codex, Gemini, and the
+  docs-staleness agent are already running elsewhere — never launch, monitor,
+  or wait on them. Your only job: <lens description>. The PR diff is already
+  in your context. Report findings per the Agent Output Contract, then stop.
   ```
 
-- Model tiering does not apply to forks (they inherit the session model). The docs-staleness agent keeps its custom-agent path — forks cannot carry a custom system prompt.
+- Forks inherit the session model, which matches the standard path (review lenses always run at the session model). The docs-staleness agent keeps its custom-agent path with `model: "sonnet"` — forks cannot carry a custom system prompt.
 - **Never fork the Step 8 validation agents.** Validation runs 10-20 minutes after the prefix was cached; the cache has expired by then, and each fork would re-write the full prefix at premium rates. Fresh Sonnet validators are cheaper.
 
 ## Error Handling
