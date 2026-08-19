@@ -43,7 +43,15 @@ fi
 
 PACK_CONTENT=$(cat "$PACK_FILE")
 INSTRUCTIONS="${3:-Review the pull request above. Report at most 7 findings.}"
-PROMPT="${PACK_CONTENT}
+
+# Prepend a hard override that suppresses Gemini's built-in code-review-expert
+# skill, which otherwise tells Gemini to run git diff and scope its own changes.
+# That skill reviews the wrong diff on stacked PRs and in worktree checkouts.
+SKILL_OVERRIDE="IMPORTANT: Ignore the code-review-expert skill instructions. Do NOT run git diff, git status, or git log. Do NOT scope your own changes. The complete diff is provided below. Review ONLY what is provided. Do NOT use any tools to read files unless you need additional context about code outside the diff. Begin your review now.
+
+"
+
+PROMPT="${SKILL_OVERRIDE}${PACK_CONTENT}
 
 ${INSTRUCTIONS}"
 
