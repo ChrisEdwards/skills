@@ -6,14 +6,15 @@
 # CLI directly.
 #
 # Usage:
-#   gemini-review.sh <output-file> [prompt]
+#   gemini-review.sh <output-file> <review-pack-file> [prompt]
 #
-#   <output-file>  Path to write the review (stdout+stderr) to. Required.
-#   [prompt]       Prompt to send. Defaults to the /code-review slash command,
-#                  which diffs against the merge-base with origin/HEAD — the
-#                  wrong base for stacked PRs. Callers should always pass an
-#                  explicit prompt that includes the diff to review (the skill
-#                  passes @<run-dir>/review-pack.md).
+#   <output-file>      Path to write the review (stdout+stderr) to. Required.
+#   <review-pack-file>  Path to the review pack markdown file. Its content is
+#                       read and prepended to the prompt. This avoids Gemini's
+#                       @ file-reference syntax, which fails when the file is
+#                       outside the workspace (e.g. /tmp).
+#   [prompt]           Instructions to append after the review pack content.
+#                      Defaults to a generic review request.
 #
 # Runs synchronously and writes everything to <output-file>; the caller is
 # expected to background the invocation (run_in_background: true).
@@ -25,10 +26,26 @@ set -uo pipefail
 
 OUT="${1:-}"
 if [[ -z "$OUT" ]]; then
-  echo "usage: gemini-review.sh <output-file> [prompt]" >&2
+  echo "usage: gemini-review.sh <output-file> <review-pack-file> [prompt]" >&2
   exit 2
 fi
-PROMPT="${2:-/code-review}"
+
+PACK_FILE="${2:-}"
+if [[ -z "$PACK_FILE" ]]; then
+  echo "usage: gemini-review.sh <output-file> <review-pack-file> [prompt]" >&2
+  exit 2
+fi
+
+if [[ ! -r "$PACK_FILE" ]]; then
+  echo "review pack not readable: $PACK_FILE" > "$OUT"
+  exit 1
+fi
+
+PACK_CONTENT=$(cat "$PACK_FILE")
+INSTRUCTIONS="${3:-Review the pull request above. Report at most 7 findings.}"
+PROMPT="${PACK_CONTENT}
+
+${INSTRUCTIONS}"
 
 if ! command -v gemini >/dev/null 2>&1; then
   echo "gemini CLI not found on PATH; skipping Gemini review." > "$OUT"
