@@ -10,7 +10,7 @@ The Greatest Of All Time code review. Three AI models plus a documentation stale
 
 ## Cost Control
 
-**Never call the advisor tool.** This applies to the orchestrator and every subagent, fork, and validation agent in this skill. Using advisor makes this skill too expensive.
+**HARD RULE — zero advisor calls.** The orchestrator MUST NOT call the advisor tool. No subagent, fork, or validation agent may call it either. Every agent prompt in this skill already includes an explicit prohibition. If you feel tempted to call advisor for a judgment call, make the call yourself instead. A single advisor round-trip on a large diff can cost more than the entire rest of the review. This rule has no exceptions.
 
 ## Prerequisites
 
@@ -189,6 +189,7 @@ Review PR #<PR_NUM> in <REPO> for stale documentation.
 Branch: <HEAD_BRANCH> → <BASE_BRANCH>
 Read <GOAT_RUN_DIR>/review-pack.md first — it has the changed-file list and full
 diff. Do not re-fetch the diff with git or gh.
+Do NOT call the advisor tool at any point during this review.
 ```
 
 The agent's system prompt already contains the full investigation checklist and output format. Store the agent task ID so you can collect its results in Step 5.
@@ -343,6 +344,8 @@ If a file is empty, contains only errors, or the process failed, mark that engin
 
 ### Step 6: Consolidate and Deduplicate
 
+**Reminder: do NOT call the advisor tool.** Consolidation is judgment work, but advisor is still prohibited. Make the dedup and severity decisions yourself.
+
 Parse all three outputs and produce ONE definitive report.
 
 #### Deduplication Rules
@@ -467,6 +470,8 @@ After all validation agents return:
 - Recalculate the consensus counts and overall verdict based on the surviving findings.
 
 #### Disposition Pass (every finding, orchestrator-only)
+
+**Reminder: do NOT call the advisor tool.** Make all disposition decisions yourself.
 
 Technical truth is not the posting bar — whether the author will act is. After validation, check every surviving CRITICAL/HIGH/MEDIUM finding against the `PRIOR_DECISIONS` block from Step 5. This includes multi-engine CONFIRMED findings: consensus proves the code reads that way, not that the author will act. No subagents are needed — everything required is already in context. Three questions:
 
