@@ -1,11 +1,7 @@
 ---
 name: goat-review-pr
 description: >-
-  This skill should be used when the user asks for a "GOAT review", "multi-model review",
-  "comprehensive PR review", "review with all models", "three-way review", "goat-review-pr",
-  or wants the most thorough possible code review of a pull request using multiple AI engines.
-  Runs Claude, OpenAI Codex CLI, and Google Gemini CLI reviews in parallel,
-  then consolidates and deduplicates all findings into one definitive report.
+  This skill should be used when the user asks for a "GOAT review", "multi-model review", "comprehensive PR review", "review with all models", "three-way review", "goat-review-pr", or wants the most thorough possible code review of a pull request using multiple AI engines. Runs Claude, OpenAI Codex CLI, and Google Gemini CLI reviews in parallel, then consolidates and deduplicates all findings into one definitive report.
 ---
 
 # GOAT Review PR
@@ -14,7 +10,7 @@ The Greatest Of All Time code review. Three AI models plus a documentation stale
 
 ## Cost Control
 
-**Never call the advisor tool.** This applies to the orchestrator and every subagent, fork, and validation agent in this skill. The advisor round-trips the full conversation to a stronger model, and in a multi-agent review with large diffs that cost compounds fast. All review judgment stays within the agents themselves.
+**Never call the advisor tool.** This applies to the orchestrator and every subagent, fork, and validation agent in this skill. Using advisor makes this skill too expensive.
 
 ## Prerequisites
 
@@ -175,9 +171,7 @@ The `tr` filter is mandatory. Raw Codex output contains NUL and other control by
 **Always pass an explicit prompt built on the review pack.** Never send the bare `/code-review` default: that command picks its own base (the merge-base with `origin/HEAD`), which reviews the wrong diff whenever the PR's base is not the default branch (stacked PRs) or local refs drift. Substitute the literal values:
 
 ```bash
-~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt" "@<GOAT_RUN_DIR>/review-pack.md
-
-Review the pull request above (<REPO>#<PR_NUM>, branch <HEAD_BRANCH> -> <BASE_BRANCH>). The review pack contains the PR metadata, changed-file list, and the complete diff against the PR's true base branch. Review ONLY the changes in that diff. Do NOT run git diff yourself and do NOT compare against origin/HEAD or main, since on stacked PRs those include other PRs' changes. Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description, and a one-line suggested fix. Then a Minor notes list (max 5, one line each). No preamble."
+~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt" "$GOAT_RUN_DIR/review-pack.md" "Review the pull request above (<REPO>#<PR_NUM>, branch <HEAD_BRANCH> -> <BASE_BRANCH>). The review pack contains the PR metadata, changed-file list, and the complete diff against the PR's true base branch. Review ONLY the changes in that diff. Do NOT run git diff yourself and do NOT compare against origin/HEAD or main, since on stacked PRs those include other PRs' changes. Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description, and a one-line suggested fix. Then a Minor notes list (max 5, one line each). No preamble."
 ```
 
 Run with `run_in_background: true` and `timeout: 600000` (10 min).
