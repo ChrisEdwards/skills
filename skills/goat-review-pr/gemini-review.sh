@@ -73,4 +73,8 @@ if [[ $status -ne 0 ]]; then
   echo "gemini exited with status $status" >> "$OUT"
 fi
 
+# Completion marker for wait-for-files.sh. $OUT exists (empty) from launch, so
+# the waiter needs a file that appears only when Gemini is actually done.
+touch "${OUT}.done"
+
 exit $status

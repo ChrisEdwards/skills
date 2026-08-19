@@ -12,6 +12,10 @@ The Greatest Of All Time code review. Three AI models plus a documentation stale
 
 **HARD RULE — zero advisor calls.** The orchestrator MUST NOT call the advisor tool. No subagent, fork, or validation agent may call it either. Every agent prompt in this skill already includes an explicit prohibition. If you feel tempted to call advisor for a judgment call, make the call yourself instead. A single advisor round-trip on a large diff can cost more than the entire rest of the review. This rule has no exceptions.
 
+## Single-Turn Rule
+
+Run the entire review in ONE continuous turn. Claude Code runs all subagents in the background (no blocking option exists), Monitor ends the turn and re-wakes, and every turn end fires the Stop hook — which orchestrating agents and headless runs read as "done," ending the review early. So never end the turn to wait and never use Monitor. Every Claude agent writes its findings to a file in `$GOAT_RUN_DIR`, and all waiting happens through foreground calls to the bundled `wait-for-files.sh` (Step 5). Background `<task-notification>` messages inject mid-turn without ending it; use them only to detect failed agents.
+
 ## Prerequisites
 
 Verify before starting: `gh` CLI authenticated, `codex` installed, `gemini` installed. If Codex or Gemini is missing, warn and continue with available engines.
@@ -144,9 +148,9 @@ wc -c "$GOAT_RUN_DIR/review-pack.md"
 
 Substitute the literal values (heredoc-style expansion of `WORK_ITEM_CONTEXT` is fine as an `echo` per line or a quoted block). If the pack exceeds ~400KB, the diff is too large for agents to read whole — note the size in each agent prompt and instruct agents to read the pack's file list, then read the diff selectively with `Read` offsets.
 
-The pack is the input contract for every Claude agent launched in Steps 3c, 4, 7, and 8.
+The pack is the input contract for every Claude agent launched in Steps 4, 7, and 8.
 
-**Send the enabled external engines (Codex unless `GOAT_SKIP_CODEX` is set, Gemini unless `GOAT_SKIP_GEMINI` is set) and the Docs Staleness agent as parallel tool calls in one message.** Wait for the tool results to return, then proceed to Step 4.
+**Send the enabled external engines (Codex unless `GOAT_SKIP_CODEX` is set, Gemini unless `GOAT_SKIP_GEMINI` is set) as parallel tool calls in one message**, then proceed to Step 4. The docs-staleness agent launches with the Step 4 fleet.
 
 #### 3a. Codex CLI (detached)
 
@@ -180,25 +184,9 @@ The gemini invocation lives in the bundled `gemini-review.sh` (alongside this sk
 
 **Known Gemini failure modes (Aug 2026):** Gemini has a `code-review-expert` skill that tells it to run `git diff` itself. The gemini-review.sh script prepends a hard override that suppresses this, but if Gemini still runs its own diff, the findings will be about the wrong changes. The script also inlines the review pack content to avoid Gemini's workspace file restriction (it cannot read files outside the repo directory). Despite these mitigations, Gemini still produces an ~80% false positive rate in practice, with common failure modes being: (1) flagging pre-existing patterns not introduced by the diff, (2) fabricating API/constructor/library behaviors without verification, and (3) citing "missing checks" that exist in callers or surrounding code. The validation step (Step 8) catches most of these, but awareness of the pattern helps during consolidation.
 
-#### 3c. Documentation Staleness Reviewer (subagent)
-
-Launch the `docs-staleness-reviewer` custom agent via the Agent tool with `run_in_background: true`, `subagent_type: "docs-staleness-reviewer"`, and `model: "sonnet"` (docs comparison does not need a frontier model). It runs concurrently with the other engines and its results are collected in Step 5.
-
-**Agent prompt** (substitute the variables):
-
-```
-Review PR #<PR_NUM> in <REPO> for stale documentation.
-Branch: <HEAD_BRANCH> → <BASE_BRANCH>
-Read <GOAT_RUN_DIR>/review-pack.md first — it has the changed-file list and full
-diff. Do not re-fetch the diff with git or gh.
-Do NOT call the advisor tool at any point during this review.
-```
-
-The agent's system prompt already contains the full investigation checklist and output format. Store the agent task ID so you can collect its results in Step 5.
-
 ### Step 4: Run Claude Review Agents
 
-**Only after Step 3's tool calls have returned**, launch the Claude review agents. Codex and Gemini are running in the background and will complete while these agents run.
+**Only after the engine launches have returned**, launch every selected Claude lens AND the docs-staleness agent as parallel Agent calls in ONE message. All subagents run in the background — collection happens through Step 5's waiter, never by ending the turn.
 
 **Check the fork gate first.** Forked lenses (see "Forked Review Lenses" below) are the DEFAULT way to run this step when both feasibility conditions hold — they delivered frontier-model lenses at below-Sonnet-lens cost in measured runs. Run the standard dispatch below only when the gate fails, and report the choice either way.
 
@@ -210,7 +198,7 @@ The roster is deliberately small, and every Claude lens except one must earn its
 
 Size the roster to the diff before launching anything:
 
-- **Lite roster** — the diff has fewer than ~50 changed executable lines AND touches no risk domain (auth, payments, data mutations, migrations, external APIs, serialization). Run only the built-in `/review`, plus `project-standards-reviewer` when standards files exist. Codex and Gemini from Step 3 still provide the cross-model check.
+- **Lite roster** — the diff has fewer than ~50 changed executable lines AND touches no risk domain (auth, payments, data mutations, migrations, external APIs, serialization). Run only `correctness-adversarial-reviewer`, plus `project-standards-reviewer` when standards files exist. Codex and Gemini from Step 3 still provide the cross-model check.
 - **Full roster** — everything else. Run the core plus every conditional lens whose gate fires.
 
 **Announce the team.** After selecting, print one line per conditional lens that runs, naming the actual reason ("performance: PR changes cache eviction policy"), and one line for each headline lens that was skipped ("security: no security surface in this diff"). The gates stay honest only if the choices are visible.
@@ -219,13 +207,13 @@ Size the roster to the diff before launching anything:
 
 1. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation.
 
-That is the entire always-on Claude core. Codex and Gemini (Step 3) provide the independent cross-model check, and the docs-staleness agent (Step 3c) runs in the background. The built-in `/review` generalist runs only on the lite roster — with the specialists below available, it produces pure overlap.
+That is the entire always-on Claude core. Codex and Gemini provide the independent cross-model check, and the docs-staleness agent runs alongside the lenses.
 
 #### Conditional Lenses
 
 Gate each on diff content, not file paths alone. When a gate is ambiguous, the security lens fails open (run it); every other lens fails closed (skip it).
 
-- Built-in `/security-review` — the diff touches auth/authz, session handling, permission checks, user-input parsing or deserialization, secrets, crypto, queries built from user input, or a network/trust boundary. **Fails open: unsure means run.** Skip only diffs confidently free of security surface (pure refactors, docs, test-only changes).
+- `security-reviewer` — the diff touches auth/authz, session handling, permission checks, user-input parsing or deserialization, secrets, crypto, queries built from user input, or a network/trust boundary. **Fails open: unsure means run.** Skip only diffs confidently free of security surface (pure refactors, docs, test-only changes).
 - `testing-reviewer` — the diff changes test files or test infrastructure, OR changes meaningful runtime behavior (new or changed branches, state mutation, error handling, API behavior) without corresponding test work. In practice this fires on most real PRs; production-file presence alone does not fire it. Hunts coverage gaps, weak assertions, brittle implementation-coupled tests, tautological tests, and coverage gaming.
 - `project-standards-reviewer` — locate the repo's standards files first (CLAUDE.md and AGENTS.md at any directory level, linter configs, contributing docs) and pass the path list in the prompt; the agent reads them itself. If the search finds no applicable standards files, skip the lens and disclose the skip in the report. Scope it to exactly two finding types: (a) a violation of a rule actually written in those files, and (b) a regression — the diff removes or degrades something that existed (logging, metrics, error detail, docs, guardrails). Style preferences with no written rule behind them are minor notes at most.
 - `maintainability-reviewer` — the diff is structural work: a substantial refactor, new abstractions, file moves, coupling or type-boundary changes, or roughly 200+ changed executable lines. This one lens owns the entire style/structure axis; never add separate clean-code, simplicity, or architecture reviewers. Small behavior-focused diffs skip it — structure opinions on those are noise the author declines.
@@ -234,6 +222,22 @@ Gate each on diff content, not file paths alone. When a gate is ambiguous, the s
 - `data-migration-reviewer` — migration files, schema changes, backfills, data transformations, deploy-window safety.
 - `performance-reviewer` — database queries, loop-heavy data transforms, caching layers, I/O-intensive paths.
 - `previous-comments-reviewer` — only when `HAS_PRIOR_ACTIVITY` is true AND the PR has new commits since that feedback. Its sole job is verifying prior feedback actually landed: dropped threads, partial fixes (the author did X but not Y), and fixes reverted by later commits. It never flags suggestions the author declined, self-review notes, or discussions that concluded without a change request — settled items belong to the Step 8 disposition pass, not to re-litigation here. It fetches the threads itself inside its own context, so the other lenses stay blind to them.
+
+#### Docs Staleness Reviewer (always launched with the fleet)
+
+Include one Agent call in the same launch message with `subagent_type: "docs-staleness-reviewer"` and `model: "sonnet"` (docs comparison does not need a frontier model). Prompt (substitute the variables):
+
+```
+Review PR #<PR_NUM> in <REPO> for stale documentation.
+Branch: <HEAD_BRANCH> → <BASE_BRANCH>
+Read <GOAT_RUN_DIR>/review-pack.md first — it has the changed-file list and full
+diff. Do not re-fetch the diff with git or gh.
+Do NOT call the advisor tool at any point during this review.
+Write your findings to <GOAT_RUN_DIR>/lens-docs-staleness.md, then reply with
+only that path. If you cannot complete, write the file with FAILED: <reason>.
+```
+
+The agent's system prompt already contains the full investigation checklist and output format.
 
 #### Agent Input Contract
 
@@ -250,11 +254,10 @@ This replaces per-agent re-derivation of the diff, which past-run transcripts sh
 
 #### Work Item Context for Reviewers
 
-The work item block travels inside the review pack, so do not paste it into prompts. If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, add these instructions to the prompts of `correctness-adversarial-reviewer` and `testing-reviewer` (and the built-in `/review` when the lite roster runs):
+The work item block travels inside the review pack, so do not paste it into prompts. If `WORK_ITEM_CONTEXT` from Step 1 is non-empty, add these instructions to the prompts of `correctness-adversarial-reviewer` and `testing-reviewer`:
 
 - `correctness-adversarial-reviewer`: verify the implementation actually satisfies each stated requirement and acceptance criterion. A requirement that is unmet, partially met, or silently reinterpreted is a finding — HIGH if the PR claims to complete the work item. Also flag implemented behavior the work item explicitly ruled out of scope.
 - `testing-reviewer`: check that each acceptance criterion has a test exercising it. An untested acceptance criterion is a finding, not a minor note.
-- `/review` (lite roster only): use it as intent context when judging whether the change does what it set out to do.
 
 Only those agents get the added instructions — intent context doesn't change the standards or structure reviews.
 
@@ -265,34 +268,50 @@ Only those agents get the added instructions — intent context doesn't change t
 **Validation agents (Step 8) also inherit the session model.** Do NOT pass a `model:` override on them. Validation is judgment work, and a weaker validator waves through the false premises and bad fixes it exists to catch.
 
 **Utility and support agents use Sonnet** to save cost on mechanical work that does not benefit from frontier reasoning. Pass `model: "sonnet"` on these agents only:
-- The docs-staleness agent (Step 3c)
+- The docs-staleness agent (above)
 - The cross-repo impact agent (Step 7, `subagent_type: "Explore"`)
 
 This split keeps the review lenses and validators at the user's chosen quality tier while containing cost on the support fleet.
 
 #### Agent Output Contract
 
-Every agent prompt (including the built-in skills where possible) must end with this output instruction:
+Every agent prompt must end with this output instruction:
 
 ```
-Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title,
-file:line, a one-paragraph issue description, and a one-line suggested fix.
-Only report findings you would defend as MEDIUM or higher. Anything below that
-bar goes in a "Minor notes" list at the end (one line each, max 5, ordered
-most-actionable first so a concrete suggested change never loses its slot to a
-naming or phrasing observation). Return only findings and minor notes — no
-preamble, no prose report.
+Write your complete output to <GOAT_RUN_DIR>/lens-<agent-name>.md, then reply
+with only that path. Report at most 7 findings. For each: severity
+(CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description,
+and a one-line suggested fix. Only report findings you would defend as MEDIUM
+or higher. Anything below that bar goes in a "Minor notes" list at the end
+(one line each, max 5, ordered most-actionable first so a concrete suggested
+change never loses its slot to a naming or phrasing observation). Only findings
+and minor notes — no preamble, no prose report. If you cannot complete the
+review, still write the file with the single line: FAILED: <reason>.
 ```
 
-This keeps consolidation cheap: the orchestrator merges compact structured findings instead of parsing long prose reports. Agent minor notes become LOW findings with verdict SKIP in Step 6.
+The findings files are canonical — Step 6 consolidation reads them, never notification text. They also give Step 5's waiter its completion signal. Agent minor notes become LOW findings with verdict SKIP in Step 6.
 
-### Step 5: Collect Background Results
+### Step 5: Collect Results (single-turn wait)
 
-After the Step 4 review agents complete and the Gemini background task finishes, read the Gemini output. Then wait for Codex (which runs as a detached process and may take up to 15 minutes). Also collect the Docs Staleness agent results.
+Do not end the turn. Wait with the bundled waiter as a normal FOREGROUND Bash call (never Monitor, never `run_in_background`), in ~90-second slices:
+
+```bash
+~/.claude/skills/goat-review-pr/wait-for-files.sh 90 \
+  "$GOAT_RUN_DIR/lens-<name>.md" ... one spec per launched agent ... \
+  "$GOAT_RUN_DIR/lens-docs-staleness.md" \
+  "$GOAT_RUN_DIR/gemini-review.txt.done" \
+  pid:<CODEX_PID>
+```
+
+Omit the Gemini marker if `GOAT_SKIP_GEMINI` is set and the Codex PID if `GOAT_SKIP_CODEX` is set. The waiter prints `ALL_DONE`, or `PENDING` plus the unsatisfied specs when the slice ends. Between slices, reconcile and re-run with the remainder:
+
+- A task notification says an agent failed or was killed → remove its spec, mark it FAILED, never retry.
+- Run the Decision Context Fetch below during the first slice gap.
+- Deadlines: 15 minutes for lenses/staleness/Gemini, 20 for Codex. Past deadline, drop the spec and mark it FAILED (Codex: kill the PID, mark TIMEOUT), then proceed with what exists.
 
 #### Decision Context Fetch (orchestrator-only)
 
-While waiting on Codex, fetch the decision history the lenses were deliberately not shown. Lenses stay blind to prior decisions by design: a lens told "this was already accepted" is primed to under-scrutinize that code, and the acceptance itself might be wrong. Finding problems is the lens's job; filtering by disposition is the orchestrator's. So this context is fetched only now, after every lens is already running, and is never added to the review pack or any lens prompt.
+Between waiter slices, fetch the decision history the lenses were deliberately not shown. Lenses stay blind to prior decisions by design: a lens told "this was already accepted" is primed to under-scrutinize that code, and the acceptance itself might be wrong. Finding problems is the lens's job; filtering by disposition is the orchestrator's. So this context is fetched only now, after every lens is already running, and is never added to the review pack or any lens prompt.
 
 If `HAS_PRIOR_ACTIVITY` is true, fetch the PR threads in one batch:
 
@@ -305,26 +324,17 @@ Also fetch the work item's comments using the same tracker access as Step 1, whe
 
 Distill a `PRIOR_DECISIONS` block: one line per finding-shaped item the author has already answered (including in self-review) — what was raised, the author's disposition (fixed / accepted tradeoff / declined), and the stated rationale — plus one line, with date, per ticket comment that changes scope or authorizes extra work. This block feeds the Step 8 disposition pass. If there is no prior activity and the work item has no comments, record it as empty.
 
-**Gemini** — if `GOAT_SKIP_GEMINI` was set, Gemini was never launched; record it as SKIPPED and move on. Otherwise it should be done by now — read directly:
+#### Reading Results
 
-```bash
-cat "$GOAT_RUN_DIR/gemini-review.txt"
-```
+When the waiter returns `ALL_DONE` (or deadlines expire), collect everything:
 
-**Docs Staleness** — the background Agent should be done by now. Its result is returned directly as the agent's response text. If the agent returned `NO_STALE_DOCS_FOUND`, record the docs engine as OK with zero findings. Otherwise, parse its structured findings and add them to the consolidated findings list in Step 6.
+**Lens files** — read each `lens-<name>.md`. A file whose content is `FAILED: <reason>` marks that agent FAILED.
 
-**Codex** — if `GOAT_SKIP_CODEX` was set, Codex was never launched; record it as SKIPPED and move on. Otherwise use Monitor to wait for the detached process to finish:
+**Docs Staleness** — read `lens-docs-staleness.md`. If it says `NO_STALE_DOCS_FOUND`, record the docs engine as OK with zero findings; otherwise add its findings to Step 6.
 
-```bash
-# Monitor: watch for Codex completion (poll every 30s, up to 20 min)
-pid=$(cat "$GOAT_RUN_DIR/codex-pid" 2>/dev/null)
-if [ -n "$pid" ]; then
-  until ! kill -0 "$pid" 2>/dev/null; do sleep 30; done
-  echo "Codex review complete"
-fi
-```
+**Gemini** — if `GOAT_SKIP_GEMINI` was set, record SKIPPED. Otherwise `cat "$GOAT_RUN_DIR/gemini-review.txt"`.
 
-Use Monitor tool with `timeout_ms: 1200000` (20 min) and `persistent: false`. Once the monitor fires, read the output.
+**Codex** — if `GOAT_SKIP_CODEX` was set, record SKIPPED. Otherwise its PID has exited; read the output.
 
 **Important: Codex output files are large** (often 500KB+) because they include the full session transcript — tool calls, file reads, and internal traces. The actual review findings are at the **tail** of the file. Do NOT `cat` the entire file. Instead:
 
@@ -387,7 +397,7 @@ Map each engine's severity to a unified scale:
 
 If `CROSS_REPO_SURFACES` from Step 1 is non-empty, dispatch ONE subagent (Agent tool with `subagent_type: "Explore"`, `model: "sonnet"`) to investigate whether the PR's changes break or degrade consumers in other repositories. This step generates **new findings** that get added to the consolidated list. It does not validate existing findings.
 
-The agent prompt must begin with the Agent Input Contract block (Step 4), then include the `CROSS_REPO_SURFACES` list and the repo/branch context. Instruct the agent to investigate each surface area for the following categories of cross-repo breakage:
+The agent prompt must begin with the Agent Input Contract block (Step 4), then include the `CROSS_REPO_SURFACES` list and the repo/branch context. It writes its findings to `$GOAT_RUN_DIR/cross-repo.md` per the Agent Output Contract; collect it with `wait-for-files.sh` slices like Step 5. Instruct the agent to investigate each surface area for the following categories of cross-repo breakage:
 
 **Breaking API changes.** Does the PR remove, rename, or change the type of a field, endpoint, parameter, or return value that external clients depend on? A backwards-incompatible API change that ships without coordinating with consumers is a CRITICAL finding.
 
@@ -417,7 +427,7 @@ Single-engine MEDIUM findings get a lighter check. They are still posted as mino
 
 #### Dispatching Validation Agents
 
-Group the work into batches: single-engine CRITICAL/HIGH findings (two-phase), single-engine MEDIUMs (Phase 1 only), and consensus findings that carry a suggested fix (Fix Verification only). Dispatch the batches to parallel subagents (Agent tool with `subagent_type: "Explore"`, no `model:` override so they inherit the session model). Each agent prompt must begin with the Agent Input Contract block (Step 4). Use these rules for batching:
+Group the work into batches: single-engine CRITICAL/HIGH findings (two-phase), single-engine MEDIUMs (Phase 1 only), and consensus findings that carry a suggested fix (Fix Verification only). Dispatch the batches to parallel subagents (Agent tool with `subagent_type: "Explore"`, no `model:` override so they inherit the session model). Each agent prompt must begin with the Agent Input Contract block (Step 4). Each agent writes its verdicts to `$GOAT_RUN_DIR/validation-<n>.md` (FAILED line on inability, like the Agent Output Contract); collect them with `wait-for-files.sh` slices, never by ending the turn. Use these rules for batching:
 
 - **1-5 findings total** — one validation agent handles all of them
 - **6+ findings** — split into 2 agents (roughly equal batches)
@@ -712,12 +722,9 @@ The "Found by" line must identify which model(s) flagged the issue and, for Clau
 
 - **Codex findings** → `Found by: Codex`
 - **Gemini findings** → `Found by: Gemini`
-- **Claude findings** → Look at the review output in your context to determine which specific reviewer surfaced the finding:
-  - Built-in `/review` → `Found by: Claude (code review)`
-  - Built-in `/security-review` → `Found by: Claude (security review)`
-  - Named review agents → `Found by: Claude (<agent name>)` — use the specific agent name (e.g., "correctness-adversarial-reviewer", "testing-reviewer", etc.)
+- **Claude findings** → `Found by: Claude (<agent name>)` — use the specific lens name from the finding's file (e.g., "correctness-adversarial-reviewer", "security-reviewer", "testing-reviewer")
 - **Multi-engine findings** → List all engines, e.g., `Found by: Claude (testing-reviewer) + Codex + Gemini (3/3 consensus)`
-- **Docs staleness findings** (generated in Step 3c) → `Found by: Docs staleness reviewer`
+- **Docs staleness findings** (generated in Step 4) → `Found by: Docs staleness reviewer`
 - **Cross-repo impact findings** (generated in Step 7) → `Found by: Cross-repo impact analysis`
 
 #### Line Selection
@@ -777,7 +784,7 @@ Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inh
 How it changes the flow:
 
 - After building the review pack (Step 2.5), Read it into the main conversation so the diff sits in the shared cache prefix.
-- Launch ALL review lenses as forks **in a single message** so every fork shares one cached prefix. Interleaving any other tool call between launches splits the cache.
+- Launch ALL review lenses as forks **in a single message** so every fork shares one cached prefix (the docs-staleness agent's non-fork call joins the same message). Interleaving any other tool call between launches splits the cache. Forks run in the background like every subagent; the Step 5 waiter collects their findings files, so the Single-Turn Rule holds on both paths.
 - Launch the forks BEFORE the Step 5 Decision Context Fetch. Forks inherit the entire main conversation, so any prior-decision or ticket-comment content loaded before the launch leaks into every lens and breaks their deliberate blindness. This ordering matters only on the fork path (fresh agents see only their prompt and the pack), but keep it on both paths for uniformity.
 - Each fork prompt must begin with hard scoping, because a fork inherits this entire workflow and full tool access:
 
@@ -787,7 +794,8 @@ How it changes the flow:
   anything to GitHub. Do NOT call the advisor tool. Codex, Gemini, and the
   docs-staleness agent are already running elsewhere — never launch, monitor,
   or wait on them. Your only job: <lens description>. The PR diff is already
-  in your context. Report findings per the Agent Output Contract, then stop.
+  in your context. Write your findings per the Agent Output Contract to
+  <GOAT_RUN_DIR>/lens-<name>.md, reply with only that path, then stop.
   ```
 
 - Forks inherit the session model, which matches the standard path (review lenses always run at the session model). The docs-staleness agent keeps its custom-agent path with `model: "sonnet"` — forks cannot carry a custom system prompt.
@@ -806,13 +814,15 @@ How it changes the flow:
 | Codex process still running after 20 min | Kill PID, mark as TIMEOUT in report |
 | Gemini background task timeout | Mark engine as TIMEOUT in report |
 | Empty output file | Mark engine as FAILED, note in report |
+| Any Claude agent errors or dies (per task notification) | Drop its spec from the waiter, mark FAILED, continue — no retry |
+| Lens deadline (15 min) reached | Mark missing agents FAILED, proceed with available findings |
 | Docs staleness agent fails or times out | Mark as FAILED in report, continue with other engines |
 | Only 1 engine succeeds | Produce report with available findings, note reduced consensus |
 
 ## Important Notes
 
 - **Sanitize every raw CLI capture.** Any raw CLI output captured to a file must pass through `LC_ALL=C tr -d '\000-\010\013-\037\177'` before any part of it is read into context. Control bytes in a tool result permanently wedge the session (every subsequent API call fails with a 400). This applies to any engine added in the future.
-- **Do NOT interrupt the Step 4 review agents.** Once Step 4 starts, let every review agent run to full completion. Background `<task-notification>` messages from Codex/Gemini/docs-staleness will arrive mid-review. Ignore them until the Step 4 agents are done. Collecting background results early (Step 5) breaks the intended parallelism and stalls the review.
+- **Never end the turn to wait.** All waiting is a foreground `wait-for-files.sh` call (Step 5); ending the turn fires the Stop hook, which orchestrating agents and headless runs read as completion. Mid-review `<task-notification>` messages inject without ending the turn — use them only to mark failed agents. Findings always come from the `$GOAT_RUN_DIR` files.
 - **Do NOT stop after the Step 4 reviews.** The consolidation step is the core value of this skill.
 - Docs staleness findings are treated as a distinct category. They appear in the DOCS STALENESS section of the report but also contribute to the overall verdict. HIGH docs staleness findings (stale security/deployment docs) count toward the verdict the same way any other HIGH finding would.
 - Findings flagged by multiple engines carry significantly more weight than single-engine findings.
