@@ -52,7 +52,7 @@ All subsequent steps write inside this directory, e.g. `$GOAT_RUN_DIR/codex-revi
 
 Accept a PR URL as the skill argument. If none provided, determine if there is a pr for the current branch and use it.
 
-Extract metadata, the file count, and the changed-file list in ONE Bash call. Every main-loop tool call re-reads the entire cached conversation, so batching commands is a direct cost lever — measured runs spent several dollars purely on cache reads from tiny sequential Bash steps:
+Extract metadata, the file count, and the changed-file list in ONE Bash call. Every main-loop tool call re-reads the entire cached conversation, so batching commands is a direct cost lever:
 
 ```bash
 gh pr view "<PR_URL>" --json title,baseRefName,headRefName,additions,deletions,number,url,files,reviews,comments --jq '{title,baseRefName,headRefName,additions,deletions,number,url,fileCount:(.files|length),files:[.files[].path],hasPriorActivity:(((.reviews//[])|length)>0 or ((.comments//[])|length)>0)}'
@@ -127,7 +127,7 @@ If the checkout itself fails (e.g., conflicts), report the error and abort.
 
 ### Step 2.5: Build the Shared Review Pack
 
-Every Claude agent in this skill needs the same base context: PR metadata, the work item, the changed-file list, and the diff. Transcript analysis of past runs showed each reviewer independently re-deriving all of it — 15-30 tool calls and 150k-400k cache-write tokens per agent, duplicated across the whole fleet. That duplication was the single largest cost in the skill. Build the context once instead:
+Every Claude agent in this skill needs the same base context: PR metadata, the work item, the changed-file list, and the diff. Without the pack, each reviewer independently re-derives all of it at 15-30 tool calls apiece — the skill's single largest cost. Build the context once instead:
 
 ```bash
 {
@@ -141,10 +141,12 @@ Every Claude agent in this skill needs the same base context: PR metadata, the w
   gh pr view <PR_NUM> --json files --jq '.files[].path'
   echo
   echo "## Full Diff"
-  git diff "<BASE_BRANCH>...HEAD"
+  git diff "<BASE_BRANCH>...HEAD" -- ':(exclude)*.lock' ':(exclude)*package-lock.json' ':(exclude)*pnpm-lock.yaml' ':(exclude)*go.sum' ':(exclude)*.min.js' ':(exclude)*.min.css' ':(exclude)*.snap' ':(exclude)vendor/*' ':(exclude)node_modules/*' ':(exclude)*pmd-baseline.txt'
 } | LC_ALL=C tr -d '\000-\010\013-\037\177' > "$GOAT_RUN_DIR/review-pack.md"
 wc -c "$GOAT_RUN_DIR/review-pack.md"
 ```
+
+The excludes drop machine-generated content (lockfiles, minified bundles, snapshots, vendored deps, tool baselines). Requirements and work-item files (e.g. `.beans/`) stay in the pack — reviewers need them. Excluded files still appear in the Changed Files list, so lenses know they changed. This list is fixed: never add excludes at runtime, and never trim the pack to reach the fork gate — a pack over the gate simply runs the standard dispatch, which is the correct path for a diff that large. A bare filename pathspec matches only at repo root — keep the `*` prefix on nested-capable names.
 
 Substitute the literal values (heredoc-style expansion of `WORK_ITEM_CONTEXT` is fine as an `echo` per line or a quoted block). If the pack exceeds ~400KB, the diff is too large for agents to read whole — note the size in each agent prompt and instruct agents to read the pack's file list, then read the diff selectively with `Read` offsets.
 
@@ -182,17 +184,17 @@ Run with `run_in_background: true` and `timeout: 600000` (10 min).
 
 The gemini invocation lives in the bundled `gemini-review.sh` (alongside this skill) rather than inline, so it is a single reviewed artifact. The script takes the output-file path as its first argument, the review-pack file path as its second, and the prompt instructions as its third. Edit the gemini flags inside the script (e.g. the approval mode for headless review) rather than here.
 
-**Known Gemini failure modes (Aug 2026):** Gemini has a `code-review-expert` skill that tells it to run `git diff` itself. The gemini-review.sh script prepends a hard override that suppresses this, but if Gemini still runs its own diff, the findings will be about the wrong changes. The script also inlines the review pack content to avoid Gemini's workspace file restriction (it cannot read files outside the repo directory). Despite these mitigations, Gemini still produces an ~80% false positive rate in practice, with common failure modes being: (1) flagging pre-existing patterns not introduced by the diff, (2) fabricating API/constructor/library behaviors without verification, and (3) citing "missing checks" that exist in callers or surrounding code. The validation step (Step 8) catches most of these, but awareness of the pattern helps during consolidation.
+**Known Gemini failure modes:** Gemini has a `code-review-expert` skill that tells it to run `git diff` itself. The gemini-review.sh script prepends a hard override that suppresses this, but if Gemini still runs its own diff, the findings will be about the wrong changes. The script also inlines the review pack content to avoid Gemini's workspace file restriction (it cannot read files outside the repo directory). Despite these mitigations, Gemini still produces an ~80% false positive rate in practice, with common failure modes being: (1) flagging pre-existing patterns not introduced by the diff, (2) fabricating API/constructor/library behaviors without verification, and (3) citing "missing checks" that exist in callers or surrounding code. The validation step (Step 8) catches most of these, but awareness of the pattern helps during consolidation.
 
 ### Step 4: Run Claude Review Agents
 
 **Only after the engine launches have returned**, launch every selected Claude lens AND the docs-staleness agent as parallel Agent calls in ONE message. All subagents run in the background — collection happens through Step 5's waiter, never by ending the turn.
 
-**Check the fork gate first.** Forked lenses (see "Forked Review Lenses" below) are the DEFAULT way to run this step when both feasibility conditions hold — they delivered frontier-model lenses at below-Sonnet-lens cost in measured runs. Run the standard dispatch below only when the gate fails, and report the choice either way.
+**Check the fork gate first.** Forked lenses (see "Forked Review Lenses" below) are the DEFAULT way to run this step when both feasibility conditions hold — they deliver frontier-model lenses at below-Sonnet-lens cost. Run the standard dispatch below only when the gate fails, and report the choice either way.
 
 **Create a TodoWrite item per agent before you start and mark each done only after it has actually run**, then attribute every finding to the agent that produced it.
 
-The roster is deliberately small, and every Claude lens except one must earn its slot from the diff. The original ~20-lens roster was consolidated after measuring 170 posted findings across 29 PRs: the lenses removed produced zero unique MEDIUM+ findings, and half of all posted comments were nitpick/LOW noise. A later disposition study of a posted review found the author declined half of the findings, nearly all from lenses running outside their strength — so the always-on set is now minimal and every other lens is gated on diff content. Do not add extra review agents beyond this roster and its conditionals.
+The roster is deliberately small, and every Claude lens outside the core must earn its slot from the diff. Do not add extra review agents beyond this roster and its conditionals.
 
 #### Roster Selection
 
@@ -205,7 +207,8 @@ Size the roster to the diff before launching anything:
 
 #### Core (full roster, always run)
 
-1. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation.
+1. `correctness-adversarial-reviewer` — logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches. Also actively constructs failure scenarios: race conditions, malformed input, partial failures, concurrent mutation. When the diff touches exported type signatures, API routes, serialization, or versioning, add one line to its prompt: check contract consistency — shape drift between sibling methods, inconsistent no-match/error values, doc-comment promises the code does not keep.
+2. `testing-reviewer` — coverage gaps, weak assertions, brittle implementation-coupled tests, tautological tests, and coverage gaming. The lite roster excludes it, so docs-only and trivial diffs never run it.
 
 That is the entire always-on Claude core. Codex and Gemini provide the independent cross-model check, and the docs-staleness agent runs alongside the lenses.
 
@@ -214,14 +217,9 @@ That is the entire always-on Claude core. Codex and Gemini provide the independe
 Gate each on diff content, not file paths alone. When a gate is ambiguous, the security lens fails open (run it); every other lens fails closed (skip it).
 
 - `security-reviewer` — the diff touches auth/authz, session handling, permission checks, user-input parsing or deserialization, secrets, crypto, queries built from user input, or a network/trust boundary. **Fails open: unsure means run.** Skip only diffs confidently free of security surface (pure refactors, docs, test-only changes).
-- `testing-reviewer` — the diff changes test files or test infrastructure, OR changes meaningful runtime behavior (new or changed branches, state mutation, error handling, API behavior) without corresponding test work. In practice this fires on most real PRs; production-file presence alone does not fire it. Hunts coverage gaps, weak assertions, brittle implementation-coupled tests, tautological tests, and coverage gaming.
 - `project-standards-reviewer` — locate the repo's standards files first (CLAUDE.md and AGENTS.md at any directory level, linter configs, contributing docs) and pass the path list in the prompt; the agent reads them itself. If the search finds no applicable standards files, skip the lens and disclose the skip in the report. Scope it to exactly two finding types: (a) a violation of a rule actually written in those files, and (b) a regression — the diff removes or degrades something that existed (logging, metrics, error detail, docs, guardrails). Style preferences with no written rule behind them are minor notes at most.
-- `maintainability-reviewer` — the diff is structural work: a substantial refactor, new abstractions, file moves, coupling or type-boundary changes, or roughly 200+ changed executable lines. This one lens owns the entire style/structure axis; never add separate clean-code, simplicity, or architecture reviewers. Small behavior-focused diffs skip it — structure opinions on those are noise the author declines.
-- `reliability-reviewer` — error handling, retries, circuit breakers, timeouts, health checks, background jobs, async handlers.
-- `api-contract-reviewer` — API routes, request/response types, serialization, versioning, exported type signatures.
 - `data-migration-reviewer` — migration files, schema changes, backfills, data transformations, deploy-window safety.
 - `performance-reviewer` — database queries, loop-heavy data transforms, caching layers, I/O-intensive paths.
-- `previous-comments-reviewer` — only when `HAS_PRIOR_ACTIVITY` is true AND the PR has new commits since that feedback. Its sole job is verifying prior feedback actually landed: dropped threads, partial fixes (the author did X but not Y), and fixes reverted by later commits. It never flags suggestions the author declined, self-review notes, or discussions that concluded without a change request — settled items belong to the Step 8 disposition pass, not to re-litigation here. It fetches the threads itself inside its own context, so the other lenses stay blind to them.
 
 #### Docs Staleness Reviewer (always launched with the fleet)
 
@@ -250,7 +248,7 @@ Read source files only when you need context beyond the diff.
 Do NOT call the advisor tool at any point during this review.
 ```
 
-This replaces per-agent re-derivation of the diff, which past-run transcripts showed was the skill's largest token cost.
+This replaces per-agent re-derivation of the diff, the skill's largest token cost.
 
 #### Work Item Context for Reviewers
 
@@ -322,7 +320,7 @@ gh api "repos/<REPO>/pulls/<PR_NUM>/comments" --paginate
 
 Also fetch the work item's comments using the same tracker access as Step 1, whenever a work item was found — scope changes and authorizations usually land in a late comment, and a review that reads only the ticket description will flag work the team already approved.
 
-Distill a `PRIOR_DECISIONS` block: one line per finding-shaped item the author has already answered (including in self-review) — what was raised, the author's disposition (fixed / accepted tradeoff / declined), and the stated rationale — plus one line, with date, per ticket comment that changes scope or authorizes extra work. This block feeds the Step 8 disposition pass. If there is no prior activity and the work item has no comments, record it as empty.
+Distill a `PRIOR_DECISIONS` block: one line per finding-shaped item the author has already answered (including in self-review) — what was raised, the author's disposition (fixed / accepted tradeoff / declined), and the stated rationale — one line per raised item still awaiting a response, plus one line, with date, per ticket comment that changes scope or authorizes extra work. This block feeds the Step 8 disposition pass, in both directions: suppressing re-raises and catching prior feedback that never landed. If there is no prior activity and the work item has no comments, record it as empty.
 
 #### Reading Results
 
@@ -362,7 +360,7 @@ Parse all three outputs and produce ONE definitive report.
 
 #### Gemini Findings Triage
 
-Before deduplicating, triage Gemini-only findings with extra skepticism. Gemini runs ~80% false positive in practice (Aug 2026 measurement across 20 reviews). The most common failure modes are:
+Before deduplicating, triage Gemini-only findings with extra skepticism. Gemini runs ~80% false positive in practice. The most common failure modes are:
 
 1. **Pre-existing issues** not introduced by this diff. If the flagged code or pattern exists unchanged in the base branch, reject immediately.
 2. **Fabricated premises** about APIs, constructors, or library behavior. If a Gemini finding's argument depends on how a specific API works and the claim seems unusual, it is likely wrong. Do not accept without checking.
@@ -503,257 +501,11 @@ Technical truth is not the posting bar — whether the author will act is. After
 
 Suppressed findings are removed from the posted review but stay in the on-screen report under the SUPPRESSED section, one line each with the reason, so the user can audit what the filter removed.
 
-### Step 9: Output the Consolidated Report
+**Prior-feedback follow-up.** When `HAS_PRIOR_ACTIVITY` is true and the PR has new commits since that feedback, the `PRIOR_DECISIONS` block also works in the generating direction: for each item the author agreed to fix or left unanswered, check the diff for whether the fix actually landed. A dropped thread, a partial fix (the author did X but not Y), or a fix reverted by a later commit is a new finding — add it to the report at the original item's severity with attribution `Prior-feedback follow-up`. Suggestions the author declined and discussions that concluded without a change request are settled; leave them alone.
 
-Produce this exact format:
+### Step 9: Report and Submit
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  GOAT REVIEW: <PR_TITLE>
-  <REPO>#<PR_NUM> | <FILE_COUNT> files | +<ADDS> -<DELS>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-REVIEW SOURCES
-  Claude (<one line per agent run>)  .... <status: OK | FAILED>
-  Codex  (review)            .... <status: OK | FAILED | SKIPPED>
-  Gemini (code-review)       .... <status: OK | FAILED | SKIPPED>
-  Docs Staleness (reviewer)  .... <status: OK | FAILED | NO STALE DOCS>
-  Roster: <full | lite — reason>
-  Lenses: <forked | standard — reason>
-
-━━━ SUMMARY ━━━
-
-<2-3 sentence overall assessment. Is this PR safe to merge?
- What's the biggest risk? How many total unique findings?>
-
-━━━ FINDINGS ━━━
-
-CRITICAL (<count>) — Must fix before merge
-─────────────────────────────────────────
-
-[C1] <title>
-     File: <path>:<line>
-     Flagged by: <engines, e.g. "Claude + Codex + Gemini (3/3)">
-     Issue: <clear description>
-     Fix: <specific actionable suggestion>
-     Verdict: FIX
-
-HIGH (<count>) — Strongly recommended
-─────────────────────────────────────────
-
-[H1] <title>
-     File: <path>:<line>
-     Flagged by: <engines>
-     Issue: <description>
-     Fix: <suggestion>
-     Verdict: FIX | CONSIDER
-
-MEDIUM (<count>) — Worth addressing
-─────────────────────────────────────────
-
-[M1] <title>
-     File: <path>:<line>
-     Flagged by: <engines>
-     Issue: <description>
-     Fix: <suggestion>
-     Verdict: FIX | SKIP — <reason>
-
-LOW (<count>) — Optional improvements
-─────────────────────────────────────────
-
-[L1] <title>
-     File: <path>:<line>
-     Flagged by: <engines>
-     Issue: <description>
-     Verdict: SKIP — <reason>
-
-━━━ SUPPRESSED (disposition pass) ━━━
-
-  <One line per suppressed finding: title — reason
-   (settled in prior round | authorized in ticket comment |
-   established local pattern). Omit this section when
-   nothing was suppressed.>
-
-━━━ DOCS STALENESS ━━━
-
-  <If any docs staleness findings exist, list them here in
-   the same finding format as above. If none, print:
-   "No stale documentation detected.">
-
-━━━ CONSENSUS ━━━
-
-  <N>/<N>  engines agree: <count> findings
-  2/<N>+ engines agree: <count> findings
-  Single engine:       <count> findings
-
-  (where N = number of active engines: 3 when all run, fewer when engines are skipped)
-
-━━━ VERDICT ━━━
-
-  <APPROVE | REQUEST CHANGES | COMMENT>
-  <one sentence justification>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-#### Verdict Logic
-
-- Any CRITICAL findings → **REQUEST CHANGES**
-- 3+ HIGH findings → **REQUEST CHANGES**
-- 1-2 HIGH findings → **COMMENT** with fix recommendations
-- Only MEDIUM/LOW → **APPROVE** with suggestions
-- No findings → **APPROVE**
-
-#### Per-Finding Verdict Logic
-
-Each finding gets a FIX, CONSIDER, or SKIP verdict:
-- CRITICAL or HIGH severity → **FIX**
-- MEDIUM + multi-engine consensus → **FIX**
-- MEDIUM + single engine → **CONSIDER**
-- LOW + multi-engine consensus → **CONSIDER**
-- LOW + single engine → **SKIP** with brief reason
-
-### Step 10: Submit a GitHub PR Review
-
-After displaying the consolidated report, ask the user whether they want to submit a formal GitHub PR review using the AskUserQuestion tool. Present two questions in a single AskUserQuestion call:
-
-**Question 1 — Post review?**
-
-Ask whether to submit the review. Options:
-
-- **Yes, submit review** — proceed with review creation
-- **No, skip** — skip to Step 11
-
-If the user declines, skip to Step 11.
-
-**Question 2 — Review disposition**
-
-Ask what disposition to give the review. Pre-select the disposition that matches the verdict from Step 9's Verdict Logic, but let the user override it. Options:
-
-- **Approve** — mark the PR as approved
-- **Request Changes** — block the PR until changes are made
-- **Comment** — leave feedback without approving or blocking
-
-**Question 3 — Review body**
-
-Ask if the user wants to add any overall comments to the review body. Options:
-
-- **Use generated summary** — use the 2-3 sentence summary from the GOAT report as the review body
-- **No body** — submit the review with inline comments only
-
-If the user selects "Other" they can type a custom review body to use instead.
-
-#### Branding
-
-Do NOT use the word "GOAT" in any text posted to GitHub (review body, inline comments, or general comments). "GOAT" is an internal skill name, not a public label. Use "Multi-model review" or "Review" instead when a header is needed. The on-screen report shown in the terminal may use "GOAT" freely since only the user sees it.
-
-#### Building the Review Payload
-
-Get the HEAD commit SHA:
-
-```bash
-gh pr view <PR_NUM> --repo <REPO> --json headRefOid --jq '.headRefOid'
-```
-
-Build a JSON payload file containing the review body, event, commit ID, and all inline comments. Write it to `$GOAT_RUN_DIR/review-payload.json`:
-
-```json
-{
-  "commit_id": "<HEAD_SHA>",
-  "body": "<review body text, or empty string>",
-  "event": "APPROVE | REQUEST_CHANGES | COMMENT",
-  "comments": [
-    {
-      "path": "<file path>",
-      "line": <line number>,
-      "side": "RIGHT",
-      "body": "<comment body>"
-    }
-  ]
-}
-```
-
-The `event` field maps from the user's disposition choice: "Approve" → `APPROVE`, "Request Changes" → `REQUEST_CHANGES`, "Comment" → `COMMENT`.
-
-Submit the review as a single atomic API call:
-
-```bash
-gh api repos/<REPO>/pulls/<PR_NUM>/reviews \
-  --method POST \
-  --input "$GOAT_RUN_DIR/review-payload.json"
-```
-
-This creates one review with all inline comments attached, rather than posting comments individually. The review appears as a single cohesive unit in the GitHub UI.
-
-#### Comment Body Format
-
-**Only findings with verdict FIX or CONSIDER get inline comments.** Findings with verdict SKIP (all LOW/nitpick-grade items, including agent minor notes) are never posted as inline comments — half of all inline comments in past runs were nitpick/LOW noise. Instead, collect them into one collapsed block at the end of the review body:
-
-```
-<details>
-<summary>Minor notes (<count>)</summary>
-
-- `path/file.py:42` — <one-line note> *(<attribution>)*
-- ...
-</details>
-```
-
-**Advisory structure and style findings never post inline, regardless of consensus.** A finding whose impact is structural — naming, mutability, duplication, extract-a-class suggestions, code organization — goes into the same collapsed block unless it cites a rule actually written in the repo's standards files (CLAUDE.md, AGENTS.md, linter configs) or a concrete functional defect. Multi-engine agreement does not rescue it: three models sharing a taste preference is still a taste preference, and authors decline this class of inline comment almost every time. Inline MEDIUM comments are reserved for findings with functional consequence — correctness, data integrity, security, performance, missing tests, lost observability.
-
-Each inline comment must clearly explain the issue and attribute the source model(s). Use this format:
-
-```
-**[<SEVERITY>]** <title>
-
-<Clear, detailed explanation of the issue — what's wrong and why it matters.>
-
-<If the finding affects multiple code locations, mention them:>
-Also affects: `path/to/other_file.py:42`, `path/to/another.py:88`
-
-**Suggested fix:** <specific actionable suggestion>
-
----
-*Found by: <attribution>*
-```
-
-#### Attribution Rules
-
-The "Found by" line must identify which model(s) flagged the issue and, for Claude findings, which specific review agent detected it:
-
-- **Codex findings** → `Found by: Codex`
-- **Gemini findings** → `Found by: Gemini`
-- **Claude findings** → `Found by: Claude (<agent name>)` — use the specific lens name from the finding's file (e.g., "correctness-adversarial-reviewer", "security-reviewer", "testing-reviewer")
-- **Multi-engine findings** → List all engines, e.g., `Found by: Claude (testing-reviewer) + Codex + Gemini (3/3 consensus)`
-- **Docs staleness findings** (generated in Step 4) → `Found by: Docs staleness reviewer`
-- **Cross-repo impact findings** (generated in Step 7) → `Found by: Cross-repo impact analysis`
-
-#### Line Selection
-
-- Each comment must target a line that exists in the PR diff (the RIGHT side of the diff).
-- If a finding references multiple lines, pick the most relevant one for the inline comment and mention the other affected locations in the body.
-- If the exact line is not in the diff (e.g., the finding is about a line that wasn't changed), use the nearest changed line in the same file and note the actual line in the comment body.
-
-#### Comment Ordering
-
-Order comments in the JSON array from highest to lowest severity (CRITICAL → HIGH → MEDIUM → LOW). GitHub renders them in diff order regardless, but this keeps the payload organized.
-
-#### Error Handling for Review Submission
-
-If the review API call fails (e.g., a comment targets a line not in the diff), the entire review is rejected. To handle this:
-
-1. Try submitting the full review first.
-2. If it fails with a validation error, identify the problematic comment(s) from the error message.
-3. Remove the offending comment(s) from the payload and retry.
-4. If retries still fail, fall back to posting the review body and event without inline comments, then post individual comments using the single-comment API for any that can be salvaged:
-   ```bash
-   gh api repos/<REPO>/pulls/<PR_NUM>/comments \
-     -f body="<comment body>" \
-     -f commit_id="<HEAD_SHA>" \
-     -f path="<file path>" \
-     -F line=<line number> \
-     -f side="RIGHT"
-   ```
-5. Report which comments were successfully posted and which failed.
+Read `~/.claude/skills/goat-review-pr/references/report-and-submit.md` now and follow it end to end. It holds the consolidated report format, the verdict logic, the GitHub submission flow (AskUserQuestion, payload build, comment format and attribution, error handling), and the branding rule for anything posted to GitHub. It covers what this workflow calls Steps 9 and 10; when it is done, run Step 11. It lives outside SKILL.md so the review lenses and forks never carry it.
 
 ### Step 11: Cleanup
 
@@ -772,14 +524,14 @@ rmdir "$GOAT_RUN_DIR"
 
 ## Forked Review Lenses (default Step 4 path when feasible)
 
-Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model. Measured back-to-back on the same PR, the forked run cost roughly a quarter less overall, with every lens on the frontier model at less than half the per-lens cost of a fresh frontier-model agent.
+Claude Code supports `subagent_type: "fork"` on the Agent tool: the subagent inherits the parent conversation, and because its prefix is identical to the parent's, its first request reuses the parent's prompt cache instead of paying fresh cache writes. That makes a fleet of review lenses launched from a shared, diff-loaded context cheaper than fresh agents, even though forks are locked to the session model — every lens runs on the frontier model at less than half the per-lens cost of a fresh frontier-model agent.
 
 **Use this path by default whenever both conditions hold**; otherwise run the standard Step 4 dispatch:
 
 1. The environment supports it: `CLAUDE_CODE_FORK_SUBAGENT=1` is set, and the fork `Agent` calls do not error (on error, fall back to standard Step 4 — loudly, never silently). Fork spawning is still a staged-rollout feature, so treat "not available" as normal, not as a failure.
-2. The review pack is under ~50k tokens (the diff joins the main context for the rest of the run).
+2. The review pack is under ~70k tokens (the diff joins the main context for the rest of the run). Past ~70k the per-fork cache reads erode the savings.
 
-**Always report which path ran.** At the moment you choose, print one line to the user: `Lenses: forked` or `Lenses: standard — <reason>` (e.g. "fork not supported in this environment", "review pack 82k tokens exceeds 50k limit", "CLAUDE_CODE_FORK_SUBAGENT not set"). Carry the same line into the Step 9 report's REVIEW SOURCES section. The fallback must never be silent — the user is comparing cost between the two paths and needs to know which one produced each run.
+**Always report which path ran.** At the moment you choose, print one line to the user: `Lenses: forked` or `Lenses: standard — <reason>` (e.g. "fork not supported in this environment", "review pack 82k tokens exceeds 70k limit", "CLAUDE_CODE_FORK_SUBAGENT not set"). Carry the same line into the Step 9 report's REVIEW SOURCES section. The fallback must never be silent — the user is comparing cost between the two paths and needs to know which one produced each run.
 
 How it changes the flow:
 
