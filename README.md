@@ -24,6 +24,12 @@ Turns a tracked issue (bead, Jira ticket, GitHub issue) into a reviewed implemen
 
 Usage: `/goat-triage <bead-id or issue URL>`
 
+### goat-triage-batch
+
+Triages many open beads in one pass. Give it a scope (bead IDs, children of a parent, label filters, or a plain-English query). For each untriaged bead it finds the root cause, weighs three fixes, leaves an AI-labelled comment, and adds triage and `repo:*` labels. Follow up with `goat-triage` on any bead that needs a full plan.
+
+Usage: `/goat-triage-batch <scope>`
+
 ### goat-implement
 
 Takes a triaged issue from claimed to a reviewed draft PR. Implements test-first, then loops a fresh multi-model review against a fixer until findings are clean.
