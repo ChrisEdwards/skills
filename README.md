@@ -52,6 +52,40 @@ Walks you through the complaint inbox: corroborates each entry, clusters shared 
 
 Usage: `/triage-complaints`
 
+### decision-doc
+
+Writes a decision document with you: criteria first, then options, then a scored matrix. Use it when choosing between design or technology alternatives.
+
+Usage: `/decision-doc`
+
+### grill-explanations and grill-complexity
+
+Companions to Matt Pocock's [`grilling`, `grill-me`, and `grill-with-docs`](https://github.com/mattpocock/skills) skills. `grill-explanations` makes each grilling question explain itself in full, and `grill-complexity` shows the complexity each option adds and what it buys. Agents load them automatically whenever a grilling skill runs.
+
+### spec-altitude
+
+Sets how detailed a spec and its work items should be for a large multi-step build, so each item pins down what the implementing agent cannot recover from the code and leaves the rest to it.
+
+Usage: `/spec-altitude`
+
+### pr-user-impact
+
+Explains how a PR or branch changes the product's behaviour and user experience, not its code.
+
+Usage: `/pr-user-impact`
+
+### herdr-fork
+
+Forks the current Claude Code conversation into a new [herdr](https://github.com/ogulcancelik/herdr) pane with its history intact.
+
+Usage: `/herdr-fork`
+
+### speak
+
+Toggles text-to-speech so the agent speaks a short summary of each response aloud. Bundles its own TTS server. Needs a one-time setup on Apple Silicon, see [speak/references/SETUP.md](skills/speak/references/SETUP.md).
+
+Usage: `/speak`, `/speak off`, `/speak <voice>`
+
 ## Prerequisites
 
 - `gh` CLI, authenticated
