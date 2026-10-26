@@ -14,11 +14,12 @@ Produce this exact format:
 
 REVIEW SOURCES
   Claude (<one line per agent run>)  .... <status: OK | FAILED>
-  Codex  (review)            .... <status: OK | FAILED | SKIPPED>
+  Codex  (review)            .... <status: OK | DEGRADED — reason | FAILED | SKIPPED>
   Gemini (code-review)       .... <status: OK | FAILED | SKIPPED>
   Docs Staleness (reviewer)  .... <status: OK | FAILED | NO STALE DOCS>
   Roster: <full | lite — reason>
   Lenses: <forked | standard — reason>
+  Diff base: <origin/<BASE_BRANCH> | local <BASE_BRANCH> — reason | tripwire mismatch note>
 
 ━━━ SUMMARY ━━━
 

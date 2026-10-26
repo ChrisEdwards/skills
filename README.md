@@ -30,6 +30,18 @@ Takes a triaged issue from claimed to a reviewed draft PR. Implements test-first
 
 Usage: `/goat-implement <bead-id or issue URL>`
 
+### darkfactory
+
+Takes a bead from claimed to a reviewed draft PR with no human in the loop. Creates an isolated worktree and launches an orchestrator in herdr that drives implementer, reviewer, and fixer agents. Requires `br` (beads), herdr, and a Jira key on the bead. Run `/setup-chris-edwards-skills` first.
+
+Usage: `/darkfactory <bead-id>`
+
+### setup-chris-edwards-skills
+
+Writes `~/.agents/chris-edwards-skills.md`, the per-user settings file other skills read (for example darkfactory's projects root). Rerun it to change a setting.
+
+Usage: `/setup-chris-edwards-skills`
+
 ## Prerequisites
 
 - `gh` CLI, authenticated
@@ -38,7 +50,9 @@ Usage: `/goat-implement <bead-id or issue URL>`
 
 ## Configuration
 
-The review skill supports environment variables to skip engines:
+Per-user settings live in `~/.agents/chris-edwards-skills.md`. Create or edit it with `/setup-chris-edwards-skills`.
+
+The review skill also reads environment variables to choose engines:
 
 - `GOAT_SKIP_CODEX=1` to skip the Codex leg
-- `GOAT_SKIP_GEMINI=1` to skip the Gemini leg
+- `GOAT_INCLUDE_GEMINI=1` to run the Gemini leg (off by default)
