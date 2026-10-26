@@ -63,7 +63,7 @@ Capture: summary, evidence, impact, proposed correction, labels, `external-ref`,
 
 Then follow every reference outward:
 
-- **Jira / external-ref.** If `external-ref` or the title holds a ticket key (e.g. `AIML-1160`), fetch it with the Atlassian MCP `getJiraIssue` tool (for this org, cloudId `https://contrast.atlassian.net`). Pull the description, acceptance criteria, comments, and links.
+- **Jira / external-ref.** If `external-ref` or the title holds a ticket key (e.g. `PROJ-123`), fetch it with whatever Jira tool is available, such as the Atlassian MCP `getJiraIssue` tool with your site's cloudId. Pull the description, acceptance criteria, comments, and links.
 - **GitHub issues.** `Fixes #123` / `Closes #123` or an issues URL → `gh issue view`.
 - **Other beads.** For each dependency, `br show <dep-id>` so the plan respects ordering and stacking.
 - **Plain URLs.** Fetch with WebFetch when reachable.
