@@ -86,6 +86,18 @@ Toggles text-to-speech so the agent speaks a short summary of each response alou
 
 Usage: `/speak`, `/speak off`, `/speak <voice>`
 
+### podcast
+
+Researches a topic and writes a plain-English script, then renders it to an MP3 in one calm voice. Needs the speak skill installed and set up, plus ffmpeg. Run `/setup-chris-edwards-skills` to choose where podcasts are saved.
+
+Usage: `/podcast <topic>`
+
+### pr-video
+
+Makes a narrated MP4 that explains a pull request: a plain-English story of the change, then a walk through the real diff, slide by slide, with the narrated lines highlighted. Needs the speak skill set up, plus ffmpeg, uv, git, and Google Chrome. Run `/setup-chris-edwards-skills` to choose where videos are saved.
+
+Usage: `/pr-video <PR or branch>`
+
 ## Prerequisites
 
 - `gh` CLI, authenticated
