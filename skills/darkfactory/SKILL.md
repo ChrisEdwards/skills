@@ -20,6 +20,7 @@ The argument is a bead ID (e.g. `nf-abc`). If none given, ask for one.
 
 - `PROJECTS_ROOT`: the `darkfactory projects root` line in `~/.agents/chris-edwards-skills/config.md`. If the file or line is missing, stop and tell the user to run `/setup-chris-edwards-skills`.
 - `ORCHESTRATOR_MODEL=claude-opus-5-5`
+- `SKILL_DIR`: the absolute path of the directory containing this SKILL.md (the harness reports it when it loads the skill). Herdr agents never load this skill, so pass them this path. Never use a fixed install path.
 
 ## Preflight
 
@@ -38,5 +39,5 @@ The argument is a bead ID (e.g. `nf-abc`). If none given, ask for one.
    Use `$RANDOM` (not `$$`) for the suffix so the path stays valid across shells. After creation, `realpath` the path and use that resolved value everywhere downstream.
 2. Use herdr to spin up a Claude agent in a new workspace named `DARK-<jira-key>-<repo>`, model `--model $ORCHESTRATOR_MODEL`, working directory `$WORKTREE` (the resolved path), `--permission-mode auto`.
 3. Send this brief (fill in the values, nothing more):
-   > Read ~/.claude/skills/darkfactory/agents/orchestrator.md and follow it exactly. BEAD_ID=<bead-id> JIRA_KEY=<jira-key> WORKTREE=<worktree-path>. I approve the use of herdr to spin up agents as necessary.
+   > Read <SKILL_DIR>/agents/orchestrator.md and follow it exactly. SKILL_DIR=<SKILL_DIR> BEAD_ID=<bead-id> JIRA_KEY=<jira-key> WORKTREE=<worktree-path>. I approve the use of herdr to spin up agents as necessary.
 4. Verify the orchestrator is up and running, then end your turn. It handles everything from here.

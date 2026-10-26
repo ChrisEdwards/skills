@@ -42,6 +42,8 @@ echo "$GOAT_RUN_DIR"
 
 All subsequent steps write inside this directory, e.g. `$GOAT_RUN_DIR/codex-review.txt`, `$GOAT_RUN_DIR/codex-pid`, `$GOAT_RUN_DIR/review-payload.json`. The directory name is the run's identity — use its basename anywhere a display "run ID" is wanted.
 
+Also record `SKILL_DIR`, the absolute path of the directory containing this SKILL.md (the harness reports it when it loads the skill). Bundled scripts and references are addressed from it, never from a fixed install path, because the skill may be installed under any harness's skills folder. Carry it like `$GOAT_RUN_DIR` and substitute its literal value.
+
 **Concurrency rules — these are what keep parallel runs isolated. Do not break them:**
 
 - **Carry `$GOAT_RUN_DIR` in conversation context** and substitute its literal value into every command. Each Bash call is a fresh shell, so the variable does not persist between calls — paste the actual path each time.
@@ -193,7 +195,7 @@ The `tr` filter is mandatory. Raw Codex output contains NUL and other control by
 **Always pass an explicit prompt built on the review pack.** Never send the bare `/code-review` default: that command picks its own base (the merge-base with `origin/HEAD`), which reviews the wrong diff whenever the PR's base is not the default branch (stacked PRs) or local refs drift. Substitute the literal values:
 
 ```bash
-~/.claude/skills/goat-review-pr/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt" "$GOAT_RUN_DIR/review-pack.md" "Review the pull request above (<REPO>#<PR_NUM>, branch <HEAD_BRANCH> -> <BASE_BRANCH>). The review pack contains the PR metadata, changed-file list, and the complete diff against the PR's true base branch. Review ONLY the changes in that diff. Do NOT run git diff yourself and do NOT compare against origin/HEAD or main, since on stacked PRs those include other PRs' changes. Only flag issues INTRODUCED by this diff, not pre-existing patterns. If you cite an API, constructor, or library behavior, verify it by reading the actual source before asserting. Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description, and a one-line suggested fix. Then a Minor notes list (max 5, one line each). No preamble."
+$SKILL_DIR/gemini-review.sh "$GOAT_RUN_DIR/gemini-review.txt" "$GOAT_RUN_DIR/review-pack.md" "Review the pull request above (<REPO>#<PR_NUM>, branch <HEAD_BRANCH> -> <BASE_BRANCH>). The review pack contains the PR metadata, changed-file list, and the complete diff against the PR's true base branch. Review ONLY the changes in that diff. Do NOT run git diff yourself and do NOT compare against origin/HEAD or main, since on stacked PRs those include other PRs' changes. Only flag issues INTRODUCED by this diff, not pre-existing patterns. If you cite an API, constructor, or library behavior, verify it by reading the actual source before asserting. Report at most 7 findings. For each: severity (CRITICAL/HIGH/MEDIUM), title, file:line, a one-paragraph issue description, and a one-line suggested fix. Then a Minor notes list (max 5, one line each). No preamble."
 ```
 
 Run with `run_in_background: true` and `timeout: 600000` (10 min).
@@ -312,7 +314,7 @@ The findings files are canonical — Step 6 consolidation reads them, never noti
 Do not end the turn. Run the Decision Context Fetch below FIRST (the lenses are already running, so it can no longer leak into them). Then wait with the bundled waiter as a normal FOREGROUND Bash call (never Monitor, never `run_in_background`), in ~8-minute slices — pass `timeout: 600000` on the Bash call, since the tool's default 2-minute timeout would kill the slice early. Each slice is a tool call that re-reads the whole conversation, so long slices are a direct cost lever; never drop below 90 seconds:
 
 ```bash
-~/.claude/skills/goat-review-pr/wait-for-files.sh 480 \
+$SKILL_DIR/wait-for-files.sh 480 \
   "$GOAT_RUN_DIR/lens-<name>.md" ... one spec per launched agent ... \
   "$GOAT_RUN_DIR/lens-docs-staleness.md" \
   "$GOAT_RUN_DIR/gemini-review.txt.done" \
@@ -524,7 +526,7 @@ Suppressed findings are removed from the posted review but stay in the on-screen
 
 ### Step 9: Report and Submit
 
-Read `~/.claude/skills/goat-review-pr/references/report-and-submit.md` now and follow it end to end. It holds the consolidated report format, the verdict logic, the GitHub submission flow (AskUserQuestion, payload build, comment format and attribution, error handling), and the branding rule for anything posted to GitHub. It covers what this workflow calls Steps 9 and 10; when it is done, run Step 11. It lives outside SKILL.md so the review lenses and forks never carry it.
+Read `$SKILL_DIR/references/report-and-submit.md` now and follow it end to end. It holds the consolidated report format, the verdict logic, the GitHub submission flow (AskUserQuestion, payload build, comment format and attribution, error handling), and the branding rule for anything posted to GitHub. It covers what this workflow calls Steps 9 and 10; when it is done, run Step 11. It lives outside SKILL.md so the review lenses and forks never carry it.
 
 ### Step 11: Cleanup
 

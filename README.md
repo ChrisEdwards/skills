@@ -4,7 +4,7 @@ Claude Code skills for multi-model code review, triage, and implementation.
 
 ## Installation
 
-Symlink any skill folder into `~/.claude/skills/` (or a project's `.claude/skills/`) to make it available as a slash command.
+Symlink any skill folder into your harness's skills folder, such as `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex and other harnesses, or a project's `.claude/skills/`. Skills find their bundled files relative to their own folder, so any location works.
 
 ```bash
 ln -s /path/to/skills/skills/goat-review-pr ~/.claude/skills/goat-review-pr

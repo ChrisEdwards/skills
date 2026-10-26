@@ -1,6 +1,6 @@
 # Dark Factory orchestrator
 
-You run inside a detached git worktree (`WORKTREE`). You were given `BEAD_ID` and `JIRA_KEY`. You take the bead from claimed to a reviewed draft PR, then report.
+You run inside a detached git worktree (`WORKTREE`). You were given `SKILL_DIR`, `BEAD_ID`, and `JIRA_KEY`. Worker instruction files live in `<SKILL_DIR>/agents/`. You take the bead from claimed to a reviewed draft PR, then report.
 
 ## Beads
 
@@ -29,15 +29,15 @@ Never write scratch files (briefs, findings, prompts) into the worktree or any c
 3. **Branch**: if stacking, create a stacked branch from `origin/<parent>` with `/pr-tools:create-stacked-branch` and check it out. Otherwise branch off the default branch (honor any repo override of the merge target). Naming: `<JIRA_KEY>-<slug>` or repo convention.
 4. **Claim**: claim the bead and transition Jira per the repo's `bead-workflow` and `jira-workflow` skills.
 5. **Implement**: spawn a codex worker with brief:
-   > Read ~/.claude/skills/darkfactory/agents/implementer.md and follow it. BEAD_ID=<id>.
+   > Read <SKILL_DIR>/agents/implementer.md and follow it. BEAD_ID=<id>.
    When done, confirm commits are pushed and tests passed, then close the pane.
 6. **Draft PR**: create a draft PR with `/pr-tools:create-pr` and add the `dark-factory` label.
 7. **Review**: create the findings file path with `realpath` (e.g. `FINDINGS_FILE=$(realpath /tmp)/dark-<JIRA_KEY>-findings-$RANDOM.md`), then spawn a Claude worker with brief:
-   > Read ~/.claude/skills/darkfactory/agents/reviewer.md and follow it. BEAD_ID=<id> PR=<number> FINDINGS_FILE=<resolved-path>.
+   > Read <SKILL_DIR>/agents/reviewer.md and follow it. BEAD_ID=<id> PR=<number> FINDINGS_FILE=<resolved-path>.
    This takes 15-20 minutes. Read the findings file, close the pane.
 8. **Advisor**: consult the advisor (if enabled, not oracle) with the findings file and the diff on what to fix and how. Write its guidance to a resolved `ADVICE_FILE` path under `$(realpath /tmp)`.
 9. **Fix**: spawn a codex worker with brief:
-   > Read ~/.claude/skills/darkfactory/agents/fixer.md and follow it. BEAD_ID=<id> FINDINGS_FILE=<path> ADVICE_FILE=<path>.
+   > Read <SKILL_DIR>/agents/fixer.md and follow it. BEAD_ID=<id> FINDINGS_FILE=<path> ADVICE_FILE=<path>.
    Confirm pushed, close the pane. Update the PR description if needed.
 10. **Report**: close all panes you opened. Comment the PR link on the bead and the Jira ticket. Report results.
 11. **Failure**: if any step fails, leave the panes open, comment what happened on the bead, and stop.
