@@ -1,0 +1,70 @@
+/* PR video slide kit. 1920x1080, light Plannotator palette. Link from slides/NN.html.
+   Skeleton:
+   <div class="slide"><span class="eyebrow">03 · path/or/topic</span><h1>Title</h1>
+     <div class="content"> ...components... </div></div>
+   Components: .row (horizontal), .card (+ .p .good .bad), .tag (+ .p .good .bad .warn),
+   .stage + .arrow (flow strip), .step + .num (numbered list), .grid2, .check (✓ list),
+   .stat (big number), .chips/.chip, .scope (in/out columns), .code-row (diff + side notes),
+   .diagram (inline SVG panel), .foot (small mono footnote). Diff fragments come from
+   scripts/diff_html.py and bring their own styles. */
+:root {
+  --background: oklch(0.97 0.005 260); --foreground: oklch(0.18 0.02 260); --card: oklch(1 0 0);
+  --primary: oklch(0.50 0.25 280); --primary-foreground: oklch(1 0 0); --secondary: oklch(0.50 0.18 180);
+  --muted: oklch(0.93 0.01 260); --muted-foreground: oklch(0.40 0.02 260); --accent: oklch(0.60 0.22 50);
+  --destructive: oklch(0.50 0.25 25); --success: oklch(0.45 0.20 150); --warning: oklch(0.55 0.18 85);
+  --border: oklch(0.88 0.01 260); --code-bg: oklch(0.94 0.01 260);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  --font-display: ui-serif, Georgia, serif; --radius: 14px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:1920px; height:1080px; overflow:hidden; }
+body { font-family:var(--font-sans); background:var(--background); color:var(--foreground); -webkit-font-smoothing:antialiased; }
+.slide { width:1920px; height:1080px; padding:80px 110px; display:flex; flex-direction:column; }
+.eyebrow { font-family:var(--font-mono); font-size:24px; letter-spacing:.08em; text-transform:uppercase; color:var(--primary); font-weight:600; }
+h1 { font-family:var(--font-display); font-weight:500; font-size:68px; line-height:1.1; margin:12px 0 40px; }
+.big h1 { font-size:92px; }
+.sub { font-size:34px; color:var(--muted-foreground); max-width:1450px; line-height:1.4; }
+.content { flex:1; min-height:0; display:flex; flex-direction:column; justify-content:safe center; gap:30px; }
+/* A lone card in the column must not stretch into an empty box. */
+.content > .card, .content > .diff, .content > .col { flex:none; }
+.row { display:flex; gap:30px; }
+.col { display:flex; flex-direction:column; gap:24px; flex:1; }
+.card { background:var(--card); border:2px solid var(--border); border-radius:var(--radius); padding:30px 36px; flex:1; }
+.card h3 { font-family:var(--font-display); font-weight:500; font-size:40px; margin-bottom:12px; }
+.card p, .card li { font-size:29px; line-height:1.45; color:var(--muted-foreground); }
+.card ul { padding-left:30px; } .card li { margin:6px 0; }
+.card.p { border-color:var(--primary); border-width:3px; }
+.card.good { border-color:var(--success); border-width:3px; }
+.card.bad { border-color:var(--destructive); border-width:3px; }
+.tag { display:inline-block; font-family:var(--font-mono); font-size:21px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:5px 13px; border-radius:8px; margin-bottom:14px; }
+.tag.p { background:color-mix(in oklab,var(--primary) 14%,transparent); color:var(--primary); }
+.tag.good { background:color-mix(in oklab,var(--success) 14%,transparent); color:var(--success); }
+.tag.bad { background:color-mix(in oklab,var(--destructive) 14%,transparent); color:var(--destructive); }
+.tag.warn { background:color-mix(in oklab,var(--warning) 16%,transparent); color:var(--warning); }
+code, .mono { font-family:var(--font-mono); }
+.card code, .sub code { font-size:.86em; background:var(--muted); padding:2px 8px; border-radius:6px; color:var(--foreground); }
+.num { font-family:var(--font-mono); font-weight:700; color:var(--primary-foreground); background:var(--primary); width:50px; height:50px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:25px; flex-shrink:0; }
+.step { display:flex; gap:22px; align-items:center; font-size:30px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px 60px; }
+.stage { background:var(--card); border:3px solid var(--primary); border-radius:var(--radius); padding:26px 20px; text-align:center; flex:1; }
+.stage b { font-family:var(--font-display); font-weight:500; font-size:42px; display:block; }
+.stage span { font-family:var(--font-mono); font-size:21px; color:var(--muted-foreground); }
+.stage.dim { border-color:var(--border); opacity:.65; }
+.arrow { font-size:52px; color:var(--muted-foreground); align-self:center; }
+.stat { text-align:center; } .stat b { font-family:var(--font-display); font-weight:500; font-size:92px; display:block; }
+.stat span { font-family:var(--font-mono); font-size:21px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-foreground); }
+.chips { display:flex; flex-wrap:wrap; gap:14px; }
+.chip { font-family:var(--font-mono); font-size:23px; padding:8px 18px; border-radius:30px; background:var(--muted); border:2px solid var(--border); }
+.check { display:flex; gap:24px; align-items:flex-start; font-size:32px; }
+.check i { font-style:normal; width:46px; height:46px; border-radius:10px; background:var(--success); color:white; display:inline-flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0; }
+.check.no i { background:var(--destructive); }
+.scope { display:grid; grid-template-columns:1fr 1fr 1fr; gap:30px; }
+/* Code slides: diff on the left, 1-3 short notes on the right that match the narration order. */
+.code-row { display:flex; gap:30px; align-items:flex-start; min-height:0; }
+.code-row > .diff { flex:2.3; min-width:0; }
+.code-row > .col { flex:1; }
+.code-row .card p { font-size:26px; }
+.diagram { background:var(--card); border:2px solid var(--border); border-radius:var(--radius); padding:28px; }
+.diagram svg { width:100%; height:auto; max-height:760px; display:block; }
+.foot { font-family:var(--font-mono); font-size:22px; color:var(--muted-foreground); margin-top:20px; }

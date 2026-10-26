@@ -62,6 +62,12 @@ done
 if [[ $# -gt 0 ]]; then TEXT="$*"; else TEXT=$(cat); fi
 [[ -z "${TEXT// /}" ]] && exit 0
 
+# Both --dry and speaking need the venv, so check it before either.
+if [[ ! -x $PY ]]; then
+  print -u2 "atts: no Python environment at $DATA_DIR/venv. See references/SETUP.md in the speak skill."
+  exit 1
+fi
+
 if [[ "$DRY" == true ]]; then
   print -r -- "$TEXT" | $PY $SCRIPT_DIR/normalize.py
   exit 0
@@ -69,10 +75,6 @@ fi
 
 # Start the server if it is not answering.
 if ! curl -s --max-time 2 $BASE/health >/dev/null 2>&1; then
-  if [[ ! -x $PY ]]; then
-    print -u2 "atts: no Python environment at $DATA_DIR/venv. See references/SETUP.md in the speak skill."
-    exit 1
-  fi
   nohup $PY $SCRIPT_DIR/server.py >>$LOG 2>&1 &
   READY=false
   for i in $(seq 1 60); do

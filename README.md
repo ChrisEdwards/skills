@@ -24,6 +24,12 @@ Turns a tracked issue (bead, Jira ticket, GitHub issue) into a reviewed implemen
 
 Usage: `/goat-triage <bead-id or issue URL>`
 
+### goat-triage-batch
+
+Triages many open beads in one pass. Give it a scope (bead IDs, children of a parent, label filters, or a plain-English query). For each untriaged bead it finds the root cause, weighs three fixes, leaves an AI-labelled comment, and adds triage and `repo:*` labels. Follow up with `goat-triage` on any bead that needs a full plan.
+
+Usage: `/goat-triage-batch <scope>`
+
 ### goat-implement
 
 Takes a triaged issue from claimed to a reviewed draft PR. Implements test-first, then loops a fresh multi-model review against a fixer until findings are clean.
@@ -85,6 +91,18 @@ Usage: `/herdr-fork`
 Toggles text-to-speech so the agent speaks a short summary of each response aloud. Bundles its own TTS server. Needs a one-time setup on Apple Silicon, see [speak/references/SETUP.md](skills/speak/references/SETUP.md).
 
 Usage: `/speak`, `/speak off`, `/speak <voice>`
+
+### podcast
+
+Researches a topic and writes a plain-English script, then renders it to an MP3 in one calm voice. Needs the speak skill installed and set up, plus ffmpeg. Run `/setup-chris-edwards-skills` to choose where podcasts are saved.
+
+Usage: `/podcast <topic>`
+
+### pr-video
+
+Makes a narrated MP4 that explains a pull request: a plain-English story of the change, then a walk through the real diff, slide by slide, with the narrated lines highlighted. Needs the speak skill set up, plus ffmpeg, uv, git, and Google Chrome. Run `/setup-chris-edwards-skills` to choose where videos are saved.
+
+Usage: `/pr-video <PR or branch>`
 
 ## Prerequisites
 
