@@ -18,7 +18,7 @@ The argument is a bead ID (e.g. `nf-abc`). If none given, ask for one.
 
 ## Constants
 
-- `PROJECTS_ROOT`: the `darkfactory projects root` line in `~/.agents/chris-edwards-skills.md`. If the file or line is missing, stop and tell the user to run `/setup-chris-edwards-skills`.
+- `PROJECTS_ROOT`: the `darkfactory projects root` line in `~/.agents/chris-edwards-skills/config.md`. If the file or line is missing, stop and tell the user to run `/setup-chris-edwards-skills`.
 - `ORCHESTRATOR_MODEL=claude-opus-5-5`
 
 ## Preflight
