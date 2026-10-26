@@ -1,11 +1,14 @@
 ---
 name: speak
 description: Toggle text-to-speech so Claude speaks responses aloud via Pocket TTS. Use when the user says "speak", "/speak", "talk to me", "speak on", or "speak off". Also responds to "use voice X" to change the active voice.
+compatibility: Requires macOS on Apple Silicon, uv, Python 3.12, and ffmpeg. Downloads a ~460 MB model on first use.
 ---
 
 # Speak Skill
 
-Toggle TTS on or off. When on, every response is spoken aloud via `atts` while the full text still prints to screen.
+Toggle TTS on or off. When on, every response is spoken aloud via the bundled `scripts/atts` while the full text still prints to screen.
+
+`SKILL_DIR` below is the absolute path of the directory containing this SKILL.md (the harness reports it when it loads the skill). Substitute its literal value.
 
 ## Activation
 
@@ -25,7 +28,7 @@ After writing your text response, run a single background Bash command that spea
 ## Command template
 
 ```bash
-atts --voice $VOICE "spoken text here"
+$SKILL_DIR/scripts/atts --voice $VOICE "spoken text here"
 ```
 
 ## Defaults
@@ -44,5 +47,5 @@ This is a toggle. When the user says `/speak` or `/speak on`, note that TTS is e
 
 - Always print the full text response first, then speak.
 - Escape double quotes in spoken text with backslash.
-- Troubleshooting: `atts --status`, `atts --log`, `atts --stop`. `atts --dry "text"` prints the normalised text without speaking.
-- If `atts` is missing, tell the user and disable, and point them to [SETUP.md](SETUP.md) in this skill's folder. Files live in `~/.local/share/agent-tts/`.
+- Troubleshooting: `scripts/atts --status`, `--log`, `--stop`. `scripts/atts --dry "text"` prints the normalised text without speaking.
+- If `atts` reports no Python environment, tell the user and disable, and point them to [references/SETUP.md](references/SETUP.md). The venv and log live in `~/.local/share/agent-tts/`.

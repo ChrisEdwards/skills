@@ -82,7 +82,7 @@ Usage: `/herdr-fork`
 
 ### speak
 
-Toggles text-to-speech so the agent speaks a short summary of each response aloud. Requires the `atts` tool, see [speak/SETUP.md](skills/speak/SETUP.md).
+Toggles text-to-speech so the agent speaks a short summary of each response aloud. Bundles its own TTS server. Needs a one-time setup on Apple Silicon, see [speak/references/SETUP.md](skills/speak/references/SETUP.md).
 
 Usage: `/speak`, `/speak off`, `/speak <voice>`
 

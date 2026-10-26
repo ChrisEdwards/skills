@@ -14,11 +14,14 @@
 # Starts the server on first use and leaves it resident.
 
 set -u
-HOME_DIR=$HOME/.local/share/agent-tts
-PY=$HOME_DIR/venv/bin/python
+# Code lives beside this script (symlinks resolved). The venv and log are
+# machine data and live in DATA_DIR.
+SCRIPT_DIR=${0:A:h}
+DATA_DIR=$HOME/.local/share/agent-tts
+PY=$DATA_DIR/venv/bin/python
 PORT=${AGENT_TTS_PORT:-7711}
 BASE=http://127.0.0.1:$PORT
-LOG=$HOME_DIR/server.log
+LOG=$DATA_DIR/server.log
 VOICE=${AGENT_TTS_VOICE:-alba}
 # Seed 99 picked by ear. Seed 42 was a close second, so try --seed 42 first
 # if 99 starts to wear thin.
@@ -46,7 +49,9 @@ while [[ $# -gt 0 ]]; do
       echo "alba azelma cosette eponine fantine javert jean marius"
       exit 0 ;;
     --stop)
-      pkill -f "agent-tts/server.py" && echo "stopped" || echo "was not running"
+      # By port, not path, so it also stops a server started from elsewhere.
+      PID=$(lsof -ti tcp:$PORT -sTCP:LISTEN)
+      [[ -n "$PID" ]] && kill $PID && echo "stopped" || echo "was not running"
       exit 0 ;;
     --log)    tail -n 40 $LOG; exit 0 ;;
     -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -58,13 +63,17 @@ if [[ $# -gt 0 ]]; then TEXT="$*"; else TEXT=$(cat); fi
 [[ -z "${TEXT// /}" ]] && exit 0
 
 if [[ "$DRY" == true ]]; then
-  print -r -- "$TEXT" | $PY $HOME_DIR/normalize.py
+  print -r -- "$TEXT" | $PY $SCRIPT_DIR/normalize.py
   exit 0
 fi
 
 # Start the server if it is not answering.
 if ! curl -s --max-time 2 $BASE/health >/dev/null 2>&1; then
-  nohup $PY $HOME_DIR/server.py >>$LOG 2>&1 &
+  if [[ ! -x $PY ]]; then
+    print -u2 "atts: no Python environment at $DATA_DIR/venv. See references/SETUP.md in the speak skill."
+    exit 1
+  fi
+  nohup $PY $SCRIPT_DIR/server.py >>$LOG 2>&1 &
   READY=false
   for i in $(seq 1 60); do
     if curl -s --max-time 1 $BASE/health >/dev/null 2>&1; then READY=true; break; fi
