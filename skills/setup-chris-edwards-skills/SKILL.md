@@ -1,12 +1,12 @@
 ---
 name: setup-chris-edwards-skills
-description: Write or update the per-user settings file (~/.agents/chris-edwards-skills.md) that the skills in this pack read, such as darkfactory's projects root. Use for /setup-chris-edwards-skills, or when a skill says this file or a setting in it is missing.
+description: Write or update the per-user settings file (~/.agents/chris-edwards-skills/config.md) that the skills in this pack read, such as darkfactory's projects root. Use for /setup-chris-edwards-skills, or when a skill says this file or a setting in it is missing.
 disable-model-invocation: true
 ---
 
 # Setup Chris Edwards Skills
 
-Settings live in `~/.agents/chris-edwards-skills.md`, one `<setting>: <value>` line each. Skills read it at runtime. It is per-user, not per-repo.
+Settings live in `~/.agents/chris-edwards-skills/config.md`, one `<setting>: <value>` line each. Skills read it at runtime. It is per-user, not per-repo.
 
 ## Settings
 
