@@ -2,6 +2,11 @@
 name: speak
 description: Toggle text-to-speech so Claude speaks responses aloud via Pocket TTS. Use when the user says "speak", "/speak", "talk to me", "speak on", or "speak off". Also responds to "use voice X" to change the active voice.
 compatibility: Requires macOS on Apple Silicon, uv, Python 3.12, and ffmpeg. Downloads a ~460 MB model on first use.
+hooks:
+  UserPromptSubmit:
+    - hooks:
+        - type: command
+          command: "~/.claude/skills/speak/scripts/speak-reminder"
 ---
 
 # Speak Skill
@@ -20,7 +25,7 @@ Toggle TTS on or off. When on, every response is spoken aloud via the bundled `s
 
 After writing your text response, run a single background Bash command that speaks a **natural spoken summary** of the response. Follow these rules:
 
-1. Speak the meaning, not the markup. `atts` strips markdown and expands acronyms, paths, ticket keys and units, but it cannot summarise for you.
+1. Speak the meaning, not the markup. `atts` strips markdown and expands acronyms, paths, ticket keys, units and numbers (as words), but it cannot summarise for you.
 2. Keep it concise. Under 3 sentences, speak it nearly verbatim. Longer, summarize the key points in 2-4 spoken sentences.
 3. Never speak raw code, stack traces, or command output.
 4. Run with `run_in_background: true` so the user isn't blocked.
@@ -41,7 +46,7 @@ $SKILL_DIR/scripts/atts --voice $VOICE "spoken text here"
 
 ## State
 
-This is a toggle. When the user says `/speak` or `/speak on`, note that TTS is enabled and speak all subsequent responses until `/speak off`. When they provide a voice name, switch to that voice for all subsequent speech.
+Speak mode is per session. Invoking this skill registers a `UserPromptSubmit` hook (frontmatter, `scripts/speak-reminder`) for the rest of this session only. The hook tracks `/speak off`, `/speak on` and `/speak <voice>` from this session's prompts, and while speak mode is on it reminds you every 4th prompt to speak the reply. Keep speaking between reminders. Other sessions are unaffected until `/speak` runs in them.
 
 ## Important
 

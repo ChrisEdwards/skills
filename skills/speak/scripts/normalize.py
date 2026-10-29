@@ -49,8 +49,92 @@ UNITS = {"s": "seconds", "ms": "milliseconds", "m": "minutes",
          "gb": "gigabytes", "tb": "terabytes"}
 
 
+ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+        "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+        "sixteen", "seventeen", "eighteen", "nineteen"]
+TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+        "eighty", "ninety"]
+SCALES = [(10**12, "trillion"), (10**9, "billion"), (10**6, "million"),
+          (1000, "thousand"), (100, "hundred")]
+ORDINAL_SUFFIX = {"one": "first", "two": "second", "three": "third", "five": "fifth",
+                  "eight": "eighth", "nine": "ninth", "twelve": "twelfth"}
+
+
 def _spell(word: str) -> str:
     return "-".join(word.upper())
+
+
+def _words(n: int) -> str:
+    if n < 20:
+        return ONES[n]
+    if n < 100:
+        return TENS[n // 10] + ("" if n % 10 == 0 else " " + ONES[n % 10])
+    for size, name in SCALES:
+        if n >= size:
+            rest = n % size
+            return f"{_words(n // size)} {name}" + ("" if rest == 0 else " " + _words(rest))
+    return str(n)
+
+
+def _year(n: int) -> str:
+    if 2000 <= n <= 2009:
+        return _words(n)
+    hi, lo = divmod(n, 100)
+    if lo == 0:
+        return f"{_words(hi)} hundred"
+    return f"{_words(hi)} {'oh ' if lo < 10 else ''}{_words(lo)}"
+
+
+def _ordinal(n: int) -> str:
+    words = _words(n).split()
+    last = words[-1]
+    if last in ORDINAL_SUFFIX:
+        words[-1] = ORDINAL_SUFFIX[last]
+    elif last.endswith("y"):
+        words[-1] = last[:-1] + "ieth"
+    else:
+        words[-1] = last + "th"
+    return " ".join(words)
+
+
+def _digits(s: str) -> str:
+    return " ".join(ONES[int(d)] for d in s)
+
+
+def _numbers(t: str) -> str:
+    """Spell digits as words. Observed 2026-10-29: Pocket TTS garbled raw
+    digits ("2026", "3.7", "1,250", "2:30"); the same sentences with the
+    numbers written as words were read correctly."""
+    # Version strings: 0.6.2 -> "zero point six point two".
+    t = re.sub(r"(?<![\w.])\d+(?:\.\d+){2,}(?![\w.])",
+               lambda m: " point ".join(_words(int(p)) for p in m.group(0).split(".")), t)
+    # Clock times: 2:30 -> "two thirty", 9:05 -> "nine oh five", 4:00 -> "four o'clock".
+    def _time(m):
+        h, mins = int(m.group(1)), int(m.group(2))
+        if mins == 0:
+            return f"{_words(h)} o'clock"
+        return f"{_words(h)} {'oh ' if mins < 10 else ''}{_words(mins)}"
+    t = re.sub(r"\b(\d{1,2}):([0-5]\d)\b", _time, t)
+    # Ordinals: 29th -> "twenty ninth".
+    t = re.sub(r"\b(\d+)(?:st|nd|rd|th)\b", lambda m: _ordinal(int(m.group(1))), t)
+    # Sizes with a space before the unit: "3.7 GB" -> "3.7 gigabytes".
+    t = re.sub(r"(\d)\s+(ms|kb|mb|gb|tb)\b", lambda m: f"{m.group(1)} {UNITS[m.group(2).lower()]}",
+               t, flags=re.IGNORECASE)
+
+    def _num(m):
+        whole, frac, pct = m.group(1), m.group(2), m.group(3)
+        n = int(whole.replace(",", ""))
+        if frac is None and "," not in whole and len(whole) == 4 and 1900 <= n <= 2099:
+            spoken = _year(n)
+        elif len(whole) > 1 and whole.startswith("0"):
+            spoken = _digits(whole)
+        else:
+            spoken = _words(n)
+        if frac is not None:
+            spoken += " point " + _digits(frac)
+        return spoken + (" percent" if pct else "")
+    # Letters glued to digits ("Q3", "v2") still get the digits spoken.
+    return re.sub(r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(%)?(?![\d])", lambda m: " " + _num(m) + " ", t)
 
 
 def normalize(text: str) -> str:
@@ -100,6 +184,12 @@ def normalize(text: str) -> str:
         return f"{m.group(1)} {UNITS[m.group(2).lower()]}"
     t = re.sub(r"\b(\d+)(ms|kb|mb|gb|tb|[smhd])\b", _unit, t)
 
+    # "todo" was read as "toe-doe", and "to dos" as "toe-does". Observed 2026-10-29.
+    t = re.sub(r"\bto-?dos\b", "to dues", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bto-?do\b", "to do", t, flags=re.IGNORECASE)
+
+    t = _numbers(t)
+
     # Hyphenated lowercase identifiers become separate words so the engine
     # does not try to pronounce them as one invented word.
     t = re.sub(r"\b([a-z]+(?:-[a-z]+){1,})\b", lambda m: m.group(1).replace("-", " "), t)
@@ -119,6 +209,7 @@ def normalize(text: str) -> str:
     # Collapse whitespace and make sure it ends on a full stop so the engine
     # does not clip the final word.
     t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r" ([.,!?;:])", r"\1", t)
     if t and t[-1] not in ".!?":
         t += "."
     return t
