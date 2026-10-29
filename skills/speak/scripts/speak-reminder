@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""UserPromptSubmit hook registered by the speak skill's frontmatter.
+
+The skill registers this hook only in the session where /speak was invoked,
+so other sessions never see it. Speak mode is per session: the hook watches
+this session's prompts for /speak off, /speak on and /speak <voice>, keeps
+the setting in a per-session file, and while it is on reminds the agent on
+every prompt to speak its reply. Long sessions otherwise drift out of speak
+mode.
+"""
+
+import json
+import re
+import sys
+import time
+from pathlib import Path
+
+VOICES = {"alba", "azelma", "cosette", "eponine", "fantine", "javert", "jean", "marius"}
+STATE_DIR = Path.home() / ".local/share/agent-tts/sessions"
+ATTS = Path(__file__).resolve().parent / "atts"
+MAX_AGE_DAYS = 7
+REMIND_EVERY = 4
+
+event = json.load(sys.stdin)
+session = re.sub(r"[^\w-]", "", event.get("session_id", "")) or "unknown"
+prompt = event.get("prompt", "").strip().lower()
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+state_file = STATE_DIR / session
+
+# Default is on: the hook exists only because /speak ran in this session.
+state, voice, count = "on", "alba", 0
+if state_file.exists():
+    parts = state_file.read_text().split()
+    if len(parts) == 3:
+        state, voice, count = parts[0], parts[1], int(parts[2])
+
+changed = False
+m = re.match(r"^/?speak(?:\s+(\w+))?\s*$", prompt)
+if m:
+    arg = m.group(1)
+    if arg == "off":
+        state = "off"
+    elif arg in VOICES:
+        state, voice = "on", arg
+    elif arg in (None, "on"):
+        state = "on"
+    changed = True
+count = 0 if changed else count + 1
+state_file.write_text(f"{state} {voice} {count}\n")
+
+# Drop state files from sessions older than a week.
+cutoff = time.time() - MAX_AGE_DAYS * 86400
+for f in STATE_DIR.iterdir():
+    if f.stat().st_mtime < cutoff:
+        f.unlink(missing_ok=True)
+
+# Remind on a toggle and every REMIND_EVERY prompts after, to keep token cost low.
+if state == "on" and count % REMIND_EVERY == 0:
+    print(f"Speak mode on (voice {voice}): end replies with background "
+          f"`{ATTS} --voice {voice} \"<short spoken summary>\"`.")

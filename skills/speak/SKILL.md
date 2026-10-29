@@ -2,6 +2,11 @@
 name: speak
 description: Toggle text-to-speech so Claude speaks responses aloud via Pocket TTS. Use when the user says "speak", "/speak", "talk to me", "speak on", or "speak off". Also responds to "use voice X" to change the active voice.
 compatibility: Requires macOS on Apple Silicon, uv, Python 3.12, and ffmpeg. Downloads a ~460 MB model on first use.
+hooks:
+  UserPromptSubmit:
+    - hooks:
+        - type: command
+          command: "~/.claude/skills/speak/scripts/speak-reminder"
 ---
 
 # Speak Skill
@@ -41,7 +46,7 @@ $SKILL_DIR/scripts/atts --voice $VOICE "spoken text here"
 
 ## State
 
-This is a toggle. When the user says `/speak` or `/speak on`, note that TTS is enabled and speak all subsequent responses until `/speak off`. When they provide a voice name, switch to that voice for all subsequent speech.
+Speak mode is per session. Invoking this skill registers a `UserPromptSubmit` hook (frontmatter, `scripts/speak-reminder`) for the rest of this session only. The hook tracks `/speak off`, `/speak on` and `/speak <voice>` from this session's prompts, and while speak mode is on it reminds you every 4th prompt to speak the reply. Keep speaking between reminders. Other sessions are unaffected until `/speak` runs in them.
 
 ## Important
 
