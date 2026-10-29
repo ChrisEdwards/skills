@@ -20,7 +20,7 @@ Toggle TTS on or off. When on, every response is spoken aloud via the bundled `s
 
 After writing your text response, run a single background Bash command that speaks a **natural spoken summary** of the response. Follow these rules:
 
-1. Speak the meaning, not the markup. `atts` strips markdown and expands acronyms, paths, ticket keys and units, but it cannot summarise for you.
+1. Speak the meaning, not the markup. `atts` strips markdown and expands acronyms, paths, ticket keys, units and numbers (as words), but it cannot summarise for you.
 2. Keep it concise. Under 3 sentences, speak it nearly verbatim. Longer, summarize the key points in 2-4 spoken sentences.
 3. Never speak raw code, stack traces, or command output.
 4. Run with `run_in_background: true` so the user isn't blocked.
